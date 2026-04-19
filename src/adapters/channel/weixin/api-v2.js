@@ -52,6 +52,14 @@ async function apiPost({ baseUrl, endpoint, token, body, timeoutMs = 0, label })
       throw new Error(`${label} http ${response.status}: ${truncateForLog(raw, 512)}`);
     }
     return raw;
+  } catch (error) {
+    logFetchDiagnostic({
+      label,
+      url,
+      timeout,
+      error,
+    });
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -68,6 +76,23 @@ function parseJson(raw, label) {
 function truncateForLog(value, max) {
   const text = typeof value === "string" ? value : String(value || "");
   return text.length <= max ? text : `${text.slice(0, max)}…`;
+}
+
+function logFetchDiagnostic({ label, url, timeout, error }) {
+  const cause = error?.cause;
+  const details = {
+    label,
+    url,
+    timeout,
+    errorName: error?.name || "",
+    errorMessage: error?.message || String(error || ""),
+    errorCode: error?.code || "",
+    causeName: cause?.name || "",
+    causeMessage: cause?.message || "",
+    causeCode: cause?.code || "",
+    stack: error instanceof Error ? truncateForLog(error.stack || "", 2000) : "",
+  };
+  console.error(`[weixin-api-v2] fetch diagnostic ${JSON.stringify(details)}`);
 }
 
 async function getUpdatesV2({ baseUrl, token, getUpdatesBuf = "", timeoutMs = DEFAULT_LONG_POLL_TIMEOUT_MS }) {

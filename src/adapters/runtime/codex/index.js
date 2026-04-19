@@ -128,6 +128,7 @@ function createCodexRuntimeAdapter(config) {
 
       let threadId = sessionStore.getThreadIdForWorkspace(bindingKey, workspaceRoot);
       let outboundText = text;
+      let threadAction = "resume";
       if (!threadId) {
         const response = await runtimeClient.startThread({ cwd: workspaceRoot });
         threadId = extractThreadId(response);
@@ -136,6 +137,7 @@ function createCodexRuntimeAdapter(config) {
         }
         sessionStore.setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, metadata);
         outboundText = buildOpeningTurnText(config, text);
+        threadAction = "start";
       } else {
         await runtimeClient.resumeThread({ threadId }).catch(async () => {
           sessionStore.clearThreadIdForWorkspace(bindingKey, workspaceRoot);
@@ -146,15 +148,18 @@ function createCodexRuntimeAdapter(config) {
           }
           sessionStore.setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, metadata);
           outboundText = buildOpeningTurnText(config, text);
+          threadAction = "recreate";
         });
       }
 
+      console.log(`[codex-runtime] sendTextTurn request binding=${bindingKey} workspace=${workspaceRoot} thread=${threadId} action=${threadAction} model=${model || "(default)"} textLength=${String(outboundText || "").length}`);
       await runtimeClient.sendUserMessage({
         threadId,
         text: outboundText,
         model,
         workspaceRoot,
       });
+      console.log(`[codex-runtime] sendTextTurn dispatched thread=${threadId}`);
       return { threadId };
     },
   };

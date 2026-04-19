@@ -1,0 +1,23 @@
+# node modules
+node_modules/
+
+# git
+.git/
+
+# environment variables (sensitive)
+.env
+.env.*
+
+# state and local data
+.cyberboss/
+.cyberboss_data/
+sandbox_workspace/
+
+# logs
+logs/
+*.log
+npm-debug.log*
+
+# system files
+.DS_Store
+Thumbs.db

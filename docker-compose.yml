@@ -1,0 +1,33 @@
+services:
+  cyberboss-gateway:
+    image: ghcr.io/myvica/cyberboss:latest
+    container_name: cyberboss-gateway
+    restart: always
+    environment:
+      - CYBERBOSS_CODEX_ENDPOINT=ws://localhost:8765
+      - CYBERBOSS_USER_NAME=${CYBERBOSS_USER_NAME}
+      - CYBERBOSS_USER_GENDER=${CYBERBOSS_USER_GENDER}
+      - CYBERBOSS_ALLOWED_USER_IDS=${CYBERBOSS_ALLOWED_USER_IDS}
+      - CYBERBOSS_WORKSPACE_ROOT=/app
+      - CYBERBOSS_SCREENSHOT_CHROME_PATH=/usr/bin/chromium
+      - TIMELINE_FOR_AGENT_CHROME_PATH=/usr/bin/chromium
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - ./cyberboss_data:/root/.cyberboss
+      - ./.codex:/root/.codex
+    networks:
+      - cyberboss_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+
+networks:
+  cyberboss_net:
+    driver: bridge

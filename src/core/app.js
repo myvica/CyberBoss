@@ -1132,11 +1132,22 @@ function normalizeErrorCode(value) {
 }
 
 function formatErrorMessage(error) {
-  const raw = error instanceof Error ? error.message : String(error || "unknown error");
   if (isSessionExpiredError(error)) {
     return "微信会话已失效，请重新执行 `npm run login`";
   }
-  return raw;
+  if (!(error instanceof Error)) {
+    return String(error || "unknown error");
+  }
+  const parts = [error.message || "unknown error"];
+  const causeMessage = typeof error?.cause?.message === "string" ? error.cause.message.trim() : "";
+  const causeCode = typeof error?.cause?.code === "string" ? error.cause.code.trim() : "";
+  if (causeCode) {
+    parts.push(`causeCode=${causeCode}`);
+  }
+  if (causeMessage && causeMessage !== error.message) {
+    parts.push(`cause=${causeMessage}`);
+  }
+  return parts.join(" | ");
 }
 
 function sleep(ms) {
