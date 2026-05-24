@@ -321,7 +321,7 @@ function waitForTurnCompletion(client, threadId) {
           return;
         }
         const failureText = extractFailureText(params);
-        const hasError = failureText !== "执行失败";
+        const hasError = failureText !== "❌ Execution failed";
         cleanup();
         if (hasError) {
           reject(new Error(failureText));
