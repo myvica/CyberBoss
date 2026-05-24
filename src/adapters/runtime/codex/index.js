@@ -320,13 +320,7 @@ function waitForTurnCompletion(client, threadId) {
         if (activeTurnId && completedTurnId && completedTurnId !== activeTurnId) {
           return;
         }
-        const failureText = extractFailureText(params);
-        const hasError = failureText !== "❌ Execution failed";
         cleanup();
-        if (hasError) {
-          reject(new Error(failureText));
-          return;
-        }
         const text = itemOrder
           .map((itemId) => completedTextByItemId.get(itemId) || "")
           .filter(Boolean)

@@ -40,17 +40,6 @@ function mapCodexMessageToRuntimeEvent(message) {
   }
 
   if (method === "turn/completed") {
-    const failureText = extractFailureText(params);
-    if (failureText !== "❌ Execution failed") {
-      return {
-        type: "runtime.turn.failed",
-        payload: {
-          threadId,
-          turnId,
-          text: failureText,
-        },
-      };
-    }
     return {
       type: "runtime.turn.completed",
       payload: {
