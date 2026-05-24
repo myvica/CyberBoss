@@ -59,6 +59,7 @@ class CyberbossApp {
   printDoctor() {
     console.log(JSON.stringify({
       stateDir: this.config.stateDir,
+      codexAccessMode: this.config.codexAccessMode || "workspace-write",
       channel: this.channelAdapter.describe(),
       runtime: this.runtimeAdapter.describe(),
       timeline: this.timelineIntegration.describe(),
@@ -94,6 +95,7 @@ class CyberbossApp {
     console.log(`[cyberboss] account=${account.accountId}`);
     console.log(`[cyberboss] baseUrl=${account.baseUrl}`);
     console.log(`[cyberboss] workspaceRoot=${this.config.workspaceRoot}`);
+    console.log(`[cyberboss] codexAccessMode=${this.config.codexAccessMode || "workspace-write"}`);
     console.log(`[cyberboss] knownContextTokens=${knownContextTokens}`);
     console.log(`[cyberboss] syncBuffer=${syncBuffer ? "ready" : "empty"}`);
     console.log(`[cyberboss] codexEndpoint=${runtimeState.endpoint}`);
@@ -655,6 +657,7 @@ class CyberbossApp {
       `workspace: ${workspaceRoot}`,
       `thread: ${threadId || "(none)"}`,
       `status: ${threadState?.status || "idle"}`,
+      `access: ${this.config.codexAccessMode || "workspace-write"}`,
       `model: ${this.runtimeAdapter.getSessionStore().getCodexParamsForWorkspace(bindingKey, workspaceRoot).model || "(default)"}`,
     ];
     if (usage) {

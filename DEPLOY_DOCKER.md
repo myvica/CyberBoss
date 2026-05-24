@@ -1,4 +1,4 @@
-# Cyberboss Docker 化部署指南 (Debian)
+# Cyberboss Docker 化部署指南
 
 本方案采用 Docker 单容器部署，通过 supervisor 管理容器内的微信网关和 Codex 引擎双进程，并将宿主机仓库直接挂载到容器 `/app`，使容器进程直接读写宿主机项目代码。
 
@@ -6,7 +6,7 @@
 
 ## 1. 环境准备
 
-确保你的 Debian 服务器上已安装 Docker 和 Docker Compose。
+确保你的 Linux 服务器上已安装 Docker 和 Docker Compose。
 
 ## 2. 项目部署
 
@@ -17,75 +17,117 @@
    ```
 
 2. **创建必要的数据目录**
-   在项目目录下创建必要目录：
    ```bash
-   mkdir -p cyberboss_data .codex
+   mkdir -p .cyberboss_data .codex
    ```
 
-3. **配置环境变量与大模型认证**
-   网关依赖环境变量运行。在 `cyberboss` 目录下创建一个 `.env` 文件，填入你的个人信息：
+3. **配置 Codex 引擎**
+   复制示例配置并填入你的 API 地址：
+   ```bash
+   cp .codex/config.toml.example .codex/config.toml
+   ```
+   编辑 `.codex/config.toml`，将 `base_url` 改为你的自建 API 地址：
+   ```toml
+   model_provider = "custom"
+   model = "gpt-4o"
+
+   [model_providers.custom]
+   name = "Custom OpenAI-Compatible"
+   base_url = "https://your-api-url/v1"
+   env_key = "OPENAI_API_KEY"
+   wire_api = "responses"
+
+   [projects."/app"]
+   trust_level = "trusted"
+   ```
+
+   > 注意：`.codex/` 目录已在 `.gitignore` 和 `.dockerignore` 中排除，不会泄露到 Git 仓库或 Docker 镜像中。
+
+4. **配置环境变量**
+   在项目根目录创建 `.env` 文件：
    ```bash
    cat <<EOF > .env
+   # 必填：OpenAI API Key（通过环境变量传入，不写入配置文件）
+   OPENAI_API_KEY=sk-xxx
+
+   # 微信用户配置
    CYBERBOSS_USER_NAME=YourName
    CYBERBOSS_USER_GENDER=female
    CYBERBOSS_ALLOWED_USER_IDS=your_wechat_user_id
-   # 容器内直接挂载的宿主机仓库目录
    CYBERBOSS_WORKSPACE_ROOT=/app
+
+   # 可选：Codex 版本（默认 latest）
+   # CODEX_VERSION=latest
+
+   # 可选：访问模式（默认 full-access，跳过 bubblewrap 沙箱）
+   # CYBERBOSS_CODEX_ACCESS_MODE=full-access
    EOF
    ```
-
-   引擎配置默认从项目目录下的 `./.codex` 读取；该目录会被挂载到容器 `/root/.codex`。按你的实际 provider 写入配置即可。
 
 ## 3. 启动服务与登录
 
 本方案使用统一的 `Dockerfile`，通过 supervisor 管理双进程：
 - 微信网关：`npm run start:checkin`
-- Codex 引擎：`codex app-server --listen ws://0.0.0.0:8765`
+- Codex 引擎：`codex app-server --listen ws://127.0.0.1:8765`
 
-仓库的 Docker CI 也已切换为发布这一单一镜像。
+镜像基底为 `node:22-alpine`，Codex 通过 `@openai/codex` npm 包全局安装。
 
 1. **首次微信登录（获取二维码）**
-   因为登录逻辑使用终端输出二维码，我们需要先单独运行一次 login 命令将账号凭证保存到挂载的目录中：
    ```bash
-   docker-compose run --rm cyberboss-gateway npm run login
+   docker compose run --rm cyberboss-gateway npm run login
    ```
-   > 终端会出现一个微信二维码。使用你的手机微信扫码并授权登录。登录成功后，凭证会持久化到 `cyberboss_data` 中。
+   > 终端会出现一个微信二维码。使用你的手机微信扫码并授权登录。登录成功后，凭证会持久化到 `.cyberboss_data` 中。
 
 2. **启动容器**
    ```bash
-   docker-compose up -d
+   docker compose up -d
    ```
 
 3. **查看运行状态**
    ```bash
-   docker-compose logs -f
+   docker compose logs -f
    ```
 
-## 4. 架构与安全解析
+   启动日志中应包含：
+   - `[codex-entrypoint]` — Codex 安装诊断信息
+   - `[cyberboss] bootstrap ok` — 网关启动成功
+   - `[cyberboss] codexModels=N` — 成功连接 Codex 引擎
 
-本方案通过 `docker-compose.yml` + supervisor 实现以下架构：
+## 4. 架构说明
 
-- **单容器双进程**：微信网关和 Codex 引擎运行在同一个容器内，通过 supervisor 管理。网关通过 `ws://localhost:8765` 连接同容器内的引擎。
-- **宿主机代码直挂载**：宿主机仓库根目录通过 bind mount 挂到容器 `/app`，因此容器内执行的 `npm run start:checkin`、`npm run login` 会直接读取宿主机代码、`.env`、脚本与模板文件。
-- **依赖目录保留在容器内**：额外挂载 `/app/node_modules` 卷，避免宿主机 bind mount 覆盖镜像内已经安装好的依赖。
-- **状态与引擎配置持久化**：`./cyberboss_data` 挂载到 `/root/.cyberboss`，`./.codex` 挂载到 `/root/.codex`。
-- **权限剥夺**：保留 `security_opt: no-new-privileges:true` 与 `cap_drop: ALL`，继续减少容器内提权面。
-- **资源限制**：将 `1 CPU / 1G 内存` 的限制保留在服务级别，避免 AI 进程异常占满宿主机资源。
+- **单容器双进程**：微信网关和 Codex 引擎运行在同一容器内，通过 supervisor 管理。网关通过 `ws://localhost:8765` 连接同容器内的引擎。
+- **宿主机代码直挂载**：宿主机仓库根目录通过 bind mount 挂到容器 `/app`，容器内进程直接读写宿主机代码。
+- **依赖目录保留在容器内**：额外挂载 `/app/node_modules` 匿名卷，避免宿主机 bind mount 覆盖镜像内已安装的依赖。
+- **状态与引擎配置持久化**：`.cyberboss_data` 挂载到 `/root/.cyberboss`，`.codex` 挂载到 `/root/.codex`。
+- **API Key 通过环境变量传递**：`OPENAI_API_KEY` 从 `.env` 文件读取，通过 docker-compose 传入容器，不写入配置文件或镜像。
+- **默认 full-access 模式**：`CYBERBOSS_CODEX_ACCESS_MODE=full-access` 跳过 bubblewrap 沙箱，适合容器化环境。
 
-## 5. 安全边界变化
+## 5. 安全边界说明
 
-与旧配置相比，当前方案不再把 AI 工作区限制在 `./sandbox_workspace`。现在 `CYBERBOSS_WORKSPACE_ROOT=/app`，容器内 agent 可以直接修改宿主机仓库中的项目代码。
-
-这意味着：
-
-- 你在宿主机编辑仓库文件后，容器会立即看到变更。
-- 容器内进程写入 `/app` 时，实际就是在修改宿主机当前仓库。
-- 这会弱化原有的“工作区隔离”边界，部署前需要确认你接受这一点。
+- 容器内 agent 可以直接修改宿主机仓库中的项目代码（`CYBERBOSS_WORKSPACE_ROOT=/app`）。
+- `.codex/` 目录已在 `.dockerignore` 中排除，不会被 `COPY` 到镜像中。
+- `.env` 文件已在 `.gitignore` 中排除，不会被提交到 Git 仓库。
+- `full-access` 模式禁用了 bubblewrap 沙箱，容器本身就是隔离边界。
 
 ## 6. 高级加固（gVisor）
 
-如果觉得默认的 Docker Namespace 隔离依然不够，可以在 Debian 安装 Google 开源的用户态内核隔离工具 [gVisor](https://gvisor.dev/docs/user_guide/install/)。
-安装完成后，只需在 `docker-compose.yml` 中添加一行：
+如果觉得默认的 Docker Namespace 隔离不够，可以在服务器上安装 [gVisor](https://gvisor.dev/docs/user_guide/install/)，然后在 `docker-compose.yml` 中添加：
 ```yaml
 runtime: runsc
+```
+
+## 7. 自定义构建
+
+如果需要本地构建镜像（例如修改 Codex 版本），取消 `docker-compose.yml` 中 `build` 段的注释：
+```yaml
+image: ghcr.io/myvica/cyberboss:latest
+build:
+  context: .
+  dockerfile: Dockerfile
+  args:
+    CODEX_VERSION: ${CODEX_VERSION:-latest}
+```
+然后执行：
+```bash
+docker compose up -d --build
 ```

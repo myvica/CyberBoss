@@ -1,0 +1,15 @@
+# Codex engine configuration
+# Copy this file to config.toml and edit for your environment.
+# API key should be set via OPENAI_API_KEY environment variable (docker-compose.yml or .env).
+
+model_provider = "custom"
+model = "gpt-4o"
+
+[model_providers.custom]
+name = "Custom OpenAI-Compatible"
+base_url = "https://your-api-url/v1"
+env_key = "OPENAI_API_KEY"
+wire_api = "responses"
+
+[projects."/app"]
+trust_level = "trusted"

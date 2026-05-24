@@ -8,6 +8,9 @@ node_modules/
 .env
 .env.*
 
+# codex config (contains API keys)
+.codex/
+
 # state and local data
 .cyberboss/
 .cyberboss_data/

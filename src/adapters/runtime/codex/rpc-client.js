@@ -24,6 +24,14 @@ class CodexRpcClient {
     this.pending = new Map();
     this.isReady = false;
     this.messageListeners = new Set();
+    this.incomingLogMethods = new Set([
+      "turn/start",
+      "turn/started",
+      "turn/failed",
+      "turn/completed",
+      "item/completed",
+      "item/agentMessage/delta",
+    ]);
   }
 
   async connect() {
@@ -87,15 +95,23 @@ class CodexRpcClient {
       const socket = new WebSocket(this.endpoint);
       this.socket = socket;
       socket.on("open", () => resolve());
-      socket.on("error", (error) => reject(error));
+      socket.on("error", (error) => {
+        logCodexWebSocketError({ endpoint: this.endpoint, error });
+        reject(error);
+      });
       socket.on("message", (chunk) => {
         const message = typeof chunk === "string" ? chunk : chunk.toString("utf8");
         if (message.trim()) {
           this.handleIncoming(message);
         }
       });
-      socket.on("close", () => {
+      socket.on("close", (code, reasonBuffer) => {
         this.isReady = false;
+        logCodexWebSocketClose({
+          endpoint: this.endpoint,
+          code,
+          reason: decodeCloseReason(reasonBuffer),
+        });
       });
     });
   }
@@ -245,6 +261,8 @@ class CodexRpcClient {
       return;
     }
 
+    logCodexIncomingMessage(parsed, this.incomingLogMethods);
+
     if (parsed && parsed.id != null && this.pending.has(String(parsed.id))) {
       const { resolve, reject } = this.pending.get(String(parsed.id));
       this.pending.delete(String(parsed.id));
@@ -387,6 +405,85 @@ function normalizeWritableRoots(values) {
     roots.push(normalized);
   }
   return roots;
+}
+
+function logCodexWebSocketError({ endpoint, error }) {
+  const cause = error?.cause;
+  const details = [
+    `endpoint=${endpoint || "(unknown)"}`,
+    `errorName=${stringOrFallback(error?.name, "unknown")}`,
+    `errorMessage=${sanitizeLogValue(error?.message)}`,
+    `errorCode=${stringOrFallback(error?.code, "")}`,
+    `causeName=${stringOrFallback(cause?.name, "")}`,
+    `causeMessage=${sanitizeLogValue(cause?.message)}`,
+    `causeCode=${stringOrFallback(cause?.code, "")}`,
+  ].filter(Boolean);
+  console.error(`[codex-rpc] websocket error ${details.join(" ")}`);
+}
+
+function logCodexWebSocketClose({ endpoint, code, reason }) {
+  console.warn(`[codex-rpc] websocket close endpoint=${endpoint || "(unknown)"} code=${String(code ?? "") || ""} reason=${sanitizeLogValue(reason)}`);
+}
+
+function logCodexIncomingMessage(message, watchedMethods) {
+  const method = normalizeNonEmptyString(message?.method);
+  const params = message?.params || {};
+  const isWatchedMethod = method && watchedMethods instanceof Set && watchedMethods.has(method);
+  const isPendingResponse = message?.id != null && (message?.result || message?.error);
+  if (!isWatchedMethod && !isPendingResponse) {
+    return;
+  }
+
+  const details = [];
+  if (method) {
+    details.push(`method=${method}`);
+  }
+  if (message?.id != null) {
+    details.push(`id=${sanitizeLogValue(String(message.id))}`);
+  }
+  const threadId = normalizeNonEmptyString(params?.threadId);
+  const turnId = normalizeNonEmptyString(params?.turnId || params?.turn?.id);
+  const itemId = normalizeNonEmptyString(params?.itemId || params?.item?.id);
+  const itemType = normalizeNonEmptyString(params?.item?.type);
+  const errorMessage = message?.error?.message || params?.turn?.error?.message || params?.error?.message;
+  if (threadId) {
+    details.push(`thread=${threadId}`);
+  }
+  if (turnId) {
+    details.push(`turn=${turnId}`);
+  }
+  if (itemId) {
+    details.push(`item=${itemId}`);
+  }
+  if (itemType) {
+    details.push(`itemType=${itemType}`);
+  }
+  if (errorMessage) {
+    details.push(`error=${sanitizeLogValue(errorMessage)}`);
+  }
+  console.log(`[codex-rpc] incoming ${details.join(" ")}`);
+}
+
+function decodeCloseReason(reasonBuffer) {
+  if (typeof reasonBuffer === "string") {
+    return reasonBuffer;
+  }
+  if (Buffer.isBuffer(reasonBuffer)) {
+    return reasonBuffer.toString("utf8");
+  }
+  return "";
+}
+
+function stringOrFallback(value, fallback = "") {
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function sanitizeLogValue(value) {
+  const normalized = String(value || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return "";
+  }
+  return JSON.stringify(normalized.length > 300 ? `${normalized.slice(0, 300)}…` : normalized);
 }
 
 module.exports = { CodexRpcClient };

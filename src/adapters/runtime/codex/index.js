@@ -117,6 +117,7 @@ function createCodexRuntimeAdapter(config) {
         threadId,
         text: refreshText,
         model,
+        accessMode: config.codexAccessMode,
         workspaceRoot,
       });
       const result = await completion;
@@ -157,6 +158,7 @@ function createCodexRuntimeAdapter(config) {
         threadId,
         text: outboundText,
         model,
+        accessMode: config.codexAccessMode,
         workspaceRoot,
       });
       console.log(`[codex-runtime] sendTextTurn dispatched thread=${threadId}`);
@@ -274,7 +276,13 @@ function waitForTurnCompletion(client, threadId) {
         if (activeTurnId && completedTurnId && completedTurnId !== activeTurnId) {
           return;
         }
+        const failureText = extractFailureText(params);
+        const hasError = failureText !== "执行失败";
         cleanup();
+        if (hasError) {
+          reject(new Error(failureText));
+          return;
+        }
         const text = itemOrder
           .map((itemId) => completedTextByItemId.get(itemId) || "")
           .filter(Boolean)

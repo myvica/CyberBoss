@@ -1,20 +1,26 @@
-FROM node:22-bullseye
+FROM node:22-alpine
 
-RUN apt-get update && apt-get install -y \
-    chromium=120.0.6099.224-1~deb11u1 \
-    fonts-wqy-zenhei \
-    git \
-    curl \
+ARG CODEX_VERSION=latest
+
+RUN apk add --no-cache \
     bash \
-    supervisor \
-    && rm -rf /var/lib/apt/lists/*
+    chromium \
+    curl \
+    file \
+    font-wqy-zenhei \
+    git \
+    procps \
+    psmisc \
+    strace \
+    supervisor
 
 RUN mkdir -p /var/log/supervisor
 
 ENV CYBERBOSS_SCREENSHOT_CHROME_PATH=/usr/bin/chromium
 ENV TIMELINE_FOR_AGENT_CHROME_PATH=/usr/bin/chromium
+ENV CODEX_VERSION=${CODEX_VERSION}
 
-RUN npm install -g @openai/codex
+RUN npm install -g "@openai/codex@${CODEX_VERSION}"
 
 WORKDIR /app
 
@@ -23,6 +29,9 @@ COPY package*.json ./
 RUN npm install
 
 COPY . .
+
+COPY scripts/start-codex-app-server.sh /usr/local/bin/start-codex-app-server
+RUN chmod +x /usr/local/bin/start-codex-app-server
 
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
