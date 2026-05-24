@@ -1,10 +1,12 @@
 const fs = require("fs");
 const path = require("path");
 const { normalizeModelCatalog } = require("./model-catalog");
+const { normalizeCommandTokens } = require("../shared/approval-command");
 
 class SessionStore {
-  constructor({ filePath }) {
+  constructor({ filePath, runtimeId = "" }) {
     this.filePath = filePath;
+    this.runtimeId = normalizeValue(runtimeId);
     this.state = createEmptyState();
     this.ensureParentDirectory();
     this.load();
@@ -64,79 +66,134 @@ class SessionStore {
     return this.state.bindings[bindingKey];
   }
 
-  getThreadIdForWorkspace(bindingKey, workspaceRoot) {
+  getThreadIdForWorkspace(bindingKey, workspaceRoot, runtimeId = this.runtimeId) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return "";
     }
-    return this.state.bindings[bindingKey]?.threadIdByWorkspaceRoot?.[normalizedWorkspaceRoot] || "";
+    const binding = this.getBinding(bindingKey) || {};
+    const scoped = getThreadMapForRuntime(binding, runtimeId);
+    if (scoped[normalizedWorkspaceRoot]) {
+      return scoped[normalizedWorkspaceRoot];
+    }
+    return "";
   }
 
-  setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, extra = {}) {
+  setThreadIdForWorkspace(bindingKey, workspaceRoot, threadId, extra = {}, runtimeId = this.runtimeId) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return this.getBinding(bindingKey);
     }
 
     const current = this.getBinding(bindingKey) || {};
-    const threadIdByWorkspaceRoot = {
-      ...getThreadMap(current),
-      [normalizedWorkspaceRoot]: normalizeValue(threadId),
+    const normalizedRuntimeId = normalizeValue(runtimeId);
+    const normalizedThreadId = normalizeThreadValue(threadId);
+    const threadIdByWorkspaceRootByRuntime = {
+      ...getThreadRuntimeMap(current),
+      [normalizedRuntimeId || "default"]: {
+        ...getThreadMapForRuntime(current, normalizedRuntimeId),
+        [normalizedWorkspaceRoot]: normalizedThreadId,
+      },
     };
-
-    return this.updateBinding(bindingKey, {
+    const nextBinding = {
       ...current,
       ...extra,
       activeWorkspaceRoot: normalizedWorkspaceRoot,
-      threadIdByWorkspaceRoot,
-    });
+      threadIdByWorkspaceRootByRuntime,
+    };
+
+    if (normalizedRuntimeId === "codex") {
+      nextBinding.threadIdByWorkspaceRoot = {
+        ...getLegacyThreadMap(current),
+        [normalizedWorkspaceRoot]: normalizedThreadId,
+      };
+    }
+
+    return this.updateBinding(bindingKey, nextBinding);
   }
 
-  getCodexParamsForWorkspace(bindingKey, workspaceRoot) {
+  getRuntimeParamsForWorkspace(bindingKey, workspaceRoot) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
-      return { model: "" };
+      return { model: "", modelProvider: "" };
     }
     const current = this.getBinding(bindingKey) || {};
-    const codexParamsByWorkspaceRoot = getCodexParamsMap(current);
-    const entry = codexParamsByWorkspaceRoot[normalizedWorkspaceRoot];
+    const runtimeId = normalizeValue(this.runtimeId);
+    const entry = getRuntimeParamsMapForRuntime(current, runtimeId)[normalizedWorkspaceRoot]
+      || (runtimeId === "codex" ? getCodexParamsMap(current)[normalizedWorkspaceRoot] : null);
     return {
       model: normalizeValue(entry?.model),
+      modelProvider: normalizeValue(entry?.modelProvider || entry?.model_provider),
     };
   }
 
-  setCodexParamsForWorkspace(bindingKey, workspaceRoot, { model = "" }) {
+  setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, params = {}) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return this.getBinding(bindingKey);
     }
     const current = this.getBinding(bindingKey) || {};
-    const codexParamsByWorkspaceRoot = {
-      ...getCodexParamsMap(current),
-      [normalizedWorkspaceRoot]: {
-        model: normalizeValue(model),
+    const runtimeId = normalizeValue(this.runtimeId) || "default";
+    const previousEntry = getRuntimeParamsMapForRuntime(current, runtimeId)[normalizedWorkspaceRoot]
+      || (runtimeId === "codex" ? getCodexParamsMap(current)[normalizedWorkspaceRoot] : {})
+      || {};
+    const hasModel = Object.prototype.hasOwnProperty.call(params, "model");
+    const hasModelProvider = Object.prototype.hasOwnProperty.call(params, "modelProvider");
+    const nextEntry = {
+      ...previousEntry,
+      model: hasModel ? normalizeValue(params.model) : normalizeValue(previousEntry.model),
+      modelProvider: hasModelProvider
+        ? normalizeValue(params.modelProvider)
+        : normalizeValue(previousEntry.modelProvider || previousEntry.model_provider),
+    };
+    const runtimeParamsByWorkspaceRootByRuntime = {
+      ...getRuntimeParamsRuntimeMap(current),
+      [runtimeId]: {
+        ...getRuntimeParamsMapForRuntime(current, runtimeId),
+        [normalizedWorkspaceRoot]: nextEntry,
       },
     };
-    return this.updateBinding(bindingKey, {
+    const nextBinding = {
       ...current,
-      codexParamsByWorkspaceRoot,
-    });
+      runtimeParamsByWorkspaceRootByRuntime,
+    };
+    if (runtimeId === "codex") {
+      nextBinding.codexParamsByWorkspaceRoot = {
+        ...getCodexParamsMap(current),
+        [normalizedWorkspaceRoot]: {
+          ...previousEntry,
+          ...nextEntry,
+        },
+      };
+    }
+    return this.updateBinding(bindingKey, nextBinding);
   }
 
-  clearThreadIdForWorkspace(bindingKey, workspaceRoot) {
+  clearThreadIdForWorkspace(bindingKey, workspaceRoot, runtimeId = this.runtimeId) {
     const normalizedWorkspaceRoot = normalizeValue(workspaceRoot);
     if (!normalizedWorkspaceRoot) {
       return this.getBinding(bindingKey);
     }
     const current = this.getBinding(bindingKey) || {};
-    const threadIdByWorkspaceRoot = {
-      ...getThreadMap(current),
-      [normalizedWorkspaceRoot]: "",
+    const normalizedRuntimeId = normalizeValue(runtimeId);
+    const threadIdByWorkspaceRootByRuntime = {
+      ...getThreadRuntimeMap(current),
+      [normalizedRuntimeId || "default"]: {
+        ...getThreadMapForRuntime(current, normalizedRuntimeId),
+        [normalizedWorkspaceRoot]: "",
+      },
     };
-    return this.updateBinding(bindingKey, {
+    const nextBinding = {
       ...current,
-      threadIdByWorkspaceRoot,
-    });
+      threadIdByWorkspaceRootByRuntime,
+    };
+    if (normalizedRuntimeId === "codex") {
+      nextBinding.threadIdByWorkspaceRoot = {
+        ...getLegacyThreadMap(current),
+        [normalizedWorkspaceRoot]: "",
+      };
+    }
+    return this.updateBinding(bindingKey, nextBinding);
   }
 
   setActiveWorkspaceRoot(bindingKey, workspaceRoot) {
@@ -149,18 +206,19 @@ class SessionStore {
     });
   }
 
-  listWorkspaceRoots(bindingKey) {
+  listWorkspaceRoots(bindingKey, runtimeId = this.runtimeId) {
     const current = this.getBinding(bindingKey) || {};
-    return Object.keys(getThreadMap(current));
+    return Object.keys(getThreadMapForRuntime(current, runtimeId));
   }
 
-  findBindingForThreadId(threadId) {
+  findBindingForThreadId(threadId, runtimeId = this.runtimeId) {
     const normalizedThreadId = normalizeValue(threadId);
     if (!normalizedThreadId) {
       return null;
     }
+    const normalizedRuntimeId = normalizeValue(runtimeId);
     for (const [bindingKey, binding] of Object.entries(this.state.bindings || {})) {
-      for (const [workspaceRoot, candidateThreadId] of Object.entries(getThreadMap(binding))) {
+      for (const [workspaceRoot, candidateThreadId] of Object.entries(getThreadMapForRuntime(binding, normalizedRuntimeId))) {
         if (normalizeValue(candidateThreadId) === normalizedThreadId) {
           return {
             bindingKey,
@@ -300,10 +358,30 @@ function normalizeValue(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function getThreadMap(binding) {
+function normalizeThreadValue(value) {
+  return typeof value === "string" ? value.replace(/\s+/g, "").trim() : "";
+}
+
+function getLegacyThreadMap(binding) {
   return binding?.threadIdByWorkspaceRoot && typeof binding.threadIdByWorkspaceRoot === "object"
     ? binding.threadIdByWorkspaceRoot
     : {};
+}
+
+function getThreadRuntimeMap(binding) {
+  return binding?.threadIdByWorkspaceRootByRuntime && typeof binding.threadIdByWorkspaceRootByRuntime === "object"
+    ? binding.threadIdByWorkspaceRootByRuntime
+    : {};
+}
+
+function getThreadMapForRuntime(binding, runtimeId) {
+  const normalizedRuntimeId = normalizeValue(runtimeId);
+  const runtimeMap = getThreadRuntimeMap(binding);
+  if (!normalizedRuntimeId) {
+    return {};
+  }
+  const scoped = runtimeMap[normalizedRuntimeId];
+  return scoped && typeof scoped === "object" ? scoped : {};
 }
 
 function getCodexParamsMap(binding) {
@@ -312,10 +390,19 @@ function getCodexParamsMap(binding) {
     : {};
 }
 
-function normalizeCommandTokens(tokens) {
-  return Array.isArray(tokens)
-    ? tokens.map((part) => normalizeValue(part)).filter(Boolean)
-    : [];
+function getRuntimeParamsRuntimeMap(binding) {
+  return binding?.runtimeParamsByWorkspaceRootByRuntime && typeof binding.runtimeParamsByWorkspaceRootByRuntime === "object"
+    ? binding.runtimeParamsByWorkspaceRootByRuntime
+    : {};
+}
+
+function getRuntimeParamsMapForRuntime(binding, runtimeId) {
+  const normalizedRuntimeId = normalizeValue(runtimeId);
+  if (!normalizedRuntimeId) {
+    return {};
+  }
+  const scoped = getRuntimeParamsRuntimeMap(binding)[normalizedRuntimeId];
+  return scoped && typeof scoped === "object" ? scoped : {};
 }
 
 function isSameTokenList(left, right) {

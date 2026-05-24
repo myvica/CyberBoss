@@ -3,6 +3,22 @@ const http = require("http");
 const os = require("os");
 const path = require("path");
 const { spawn } = require("child_process");
+const {
+  buildCodexMcpConfigArgs,
+  resolveCodexProjectToolMcpServerConfig,
+} = require("../src/adapters/runtime/codex/mcp-config");
+
+try {
+  require("dotenv").config({ path: path.join(process.cwd(), ".env") });
+} catch {
+  // ignore
+}
+
+try {
+  require("dotenv").config({ path: path.join(os.homedir(), ".cyberboss", ".env") });
+} catch {
+  // ignore
+}
 
 const rootDir = path.resolve(__dirname, "..");
 const port = String(process.env.CYBERBOSS_SHARED_PORT || "8765");
@@ -104,6 +120,10 @@ function spawnDetachedCommand(command, args, { logFile, cwd = rootDir, env = {} 
 }
 
 async function ensureSharedAppServer() {
+  if (process.env.CYBERBOSS_RUNTIME && process.env.CYBERBOSS_RUNTIME !== "codex") {
+    return { pid: 0, status: "skipped" };
+  }
+
   ensureLogDir();
   const pidFromFile = readPidFile(appServerPidFile);
   if (pidFromFile && isPidAlive(pidFromFile) && (await checkReadyz())) {
@@ -127,7 +147,10 @@ async function ensureSharedAppServer() {
   }
 
   const command = process.env.CYBERBOSS_CODEX_COMMAND || "codex";
-  const pid = spawnDetachedCommand(command, ["app-server", "--listen", listenUrl], {
+  const mcpConfigArgs = buildCodexMcpConfigArgs(resolveCodexProjectToolMcpServerConfig({
+    cyberbossHome: process.env.CYBERBOSS_HOME || rootDir,
+  }));
+  const pid = spawnDetachedCommand(command, [...mcpConfigArgs, "app-server", "--listen", listenUrl], {
     logFile: appServerLogFile,
     env,
   });
@@ -181,6 +204,7 @@ function resolveBoundThread(workspaceRoot) {
   if (!fs.existsSync(sessionFile)) {
     throw new Error(`session file not found: ${sessionFile}`);
   }
+  const runtimeId = normalizeText(process.env.CYBERBOSS_RUNTIME || "codex");
   const data = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
   const currentAccountId = resolveCurrentAccountId();
   const bindings = Object.values(data.bindings || {})
@@ -188,22 +212,22 @@ function resolveBoundThread(workspaceRoot) {
     .sort((left, right) => parseTimestamp(right?.updatedAt) - parseTimestamp(left?.updatedAt));
 
   const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
-  const exact = bindings.find((binding) => getThreadId(binding, normalizedWorkspaceRoot));
+  const exact = bindings.find((binding) => getThreadId(binding, normalizedWorkspaceRoot, runtimeId));
   if (exact) {
     return {
-      threadId: getThreadId(exact, normalizedWorkspaceRoot),
+      threadId: getThreadId(exact, normalizedWorkspaceRoot, runtimeId),
       workspaceRoot: normalizedWorkspaceRoot,
     };
   }
 
   const active = bindings.find((binding) => {
     const activeWorkspaceRoot = normalizeText(binding?.activeWorkspaceRoot);
-    return activeWorkspaceRoot && getThreadId(binding, activeWorkspaceRoot);
+    return activeWorkspaceRoot && getThreadId(binding, activeWorkspaceRoot, runtimeId);
   });
   if (active) {
     const activeWorkspaceRoot = normalizeText(active.activeWorkspaceRoot);
     return {
-      threadId: getThreadId(active, activeWorkspaceRoot),
+      threadId: getThreadId(active, activeWorkspaceRoot, runtimeId),
       workspaceRoot: activeWorkspaceRoot,
     };
   }
@@ -211,14 +235,21 @@ function resolveBoundThread(workspaceRoot) {
   throw new Error(`no bound WeChat thread found for workspace: ${workspaceRoot}`);
 }
 
-function getThreadId(binding, workspaceRoot) {
+function getThreadId(binding, workspaceRoot, runtimeId = "") {
   if (!workspaceRoot) {
     return "";
   }
-  const map = binding && typeof binding.threadIdByWorkspaceRoot === "object"
-    ? binding.threadIdByWorkspaceRoot
-    : {};
+  const map = getThreadMapForRuntime(binding, runtimeId);
   return normalizeText(map[workspaceRoot]);
+}
+
+function getThreadMapForRuntime(binding, runtimeId) {
+  const normalizedRuntimeId = normalizeText(runtimeId);
+  const runtimeMap = binding && typeof binding.threadIdByWorkspaceRootByRuntime === "object"
+    ? binding.threadIdByWorkspaceRootByRuntime
+    : {};
+  const scoped = runtimeMap[normalizedRuntimeId];
+  return scoped && typeof scoped === "object" ? scoped : {};
 }
 
 function parseTimestamp(value) {

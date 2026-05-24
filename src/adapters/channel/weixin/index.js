@@ -3,27 +3,22 @@ const { listWeixinAccounts, resolveSelectedAccount } = require("./account-store"
 const { loadPersistedContextTokens, persistContextToken } = require("./context-token-store");
 const { runLoginFlow } = require("./login");
 const { getConfig, sendTyping } = require("./api");
-const { getUpdatesV2, sendTextV2 } = require("./api-v2");
-const { createLegacyWeixinChannelAdapter } = require("./legacy");
-const { createInboundFilter } = require("./message-utils-v2");
+const { getUpdates, sendText } = require("./api");
+const { createInboundFilter } = require("./message-utils");
 const { sendWeixinMediaFile } = require("./media-send");
 const { loadSyncBuffer, saveSyncBuffer } = require("./sync-buffer-store");
+const { loadWeixinConfig, saveWeixinConfig, DEFAULT_MIN_WEIXIN_CHUNK } = require("./config-store");
 
 const LONG_POLL_TIMEOUT_MS = 35_000;
 const MAX_WEIXIN_CHUNK = 3800;
 const SEND_MESSAGE_CHUNK_INTERVAL_MS = 350;
-const WEIXIN_SEND_CHUNK_LIMIT = 80;
 const WEIXIN_MAX_DELIVERY_MESSAGES = 10;
 
 function createWeixinChannelAdapter(config) {
-  const variant = normalizeAdapterVariant(config.weixinAdapterVariant);
-  if (variant === "legacy") {
-    return createLegacyWeixinChannelAdapter(config);
-  }
-
   let selectedAccount = null;
   let contextTokenCache = null;
   const inboundFilter = createInboundFilter();
+  let minWeixinChunk = loadWeixinConfig(config).minChunkChars;
 
   function ensureAccount() {
     if (!selectedAccount) {
@@ -68,29 +63,29 @@ function createWeixinChannelAdapter(config) {
     const account = ensureAccount();
     const resolvedToken = resolveContextToken(userId, contextToken);
     if (!resolvedToken) {
-      throw new Error(`缺少 context_token，无法回复用户 ${userId}`);
+      throw new Error(`Missing context_token. Cannot reply to user ${userId}.`);
     }
     const content = String(text || "");
     if (!content.trim()) {
       return Promise.resolve();
     }
+    const normalizedContent = normalizeWeixinReplyText(content);
+    const textChunks = preserveBlock ? null : chunkReplyTextForWeixin(normalizedContent, minWeixinChunk);
     const sendChunks = preserveBlock
-      ? splitUtf8(compactPlainTextForWeixin(content) || "已完成。", MAX_WEIXIN_CHUNK)
+      ? splitUtf8(normalizedContent || "Completed.", MAX_WEIXIN_CHUNK)
       : packChunksForWeixinDelivery(
-        chunkReplyTextForWeixin(content, WEIXIN_SEND_CHUNK_LIMIT).length
-          ? chunkReplyTextForWeixin(content, WEIXIN_SEND_CHUNK_LIMIT)
-          : ["已完成。"],
+        textChunks?.length ? textChunks : ["Completed."],
         WEIXIN_MAX_DELIVERY_MESSAGES,
         MAX_WEIXIN_CHUNK
       );
     return sendChunks.reduce((promise, chunk, index) => promise
       .then(() => {
-        const compactChunk = compactPlainTextForWeixin(chunk) || "已完成。";
-        return sendTextV2({
+        const deliveryChunk = finalizeWeixinDeliveryChunk(chunk) || "Completed.";
+        return sendText({
           baseUrl: account.baseUrl,
           token: account.token,
           toUserId: userId,
-          text: compactChunk,
+          text: deliveryChunk,
           contextToken: resolvedToken,
           clientId: `cb-${crypto.randomUUID()}`,
         });
@@ -107,7 +102,6 @@ function createWeixinChannelAdapter(config) {
     describe() {
       return {
         id: "weixin",
-        variant: "v2",
         kind: "channel",
         stateDir: config.stateDir,
         baseUrl: config.weixinBaseUrl,
@@ -121,10 +115,10 @@ function createWeixinChannelAdapter(config) {
     printAccounts() {
       const accounts = listWeixinAccounts(config);
       if (!accounts.length) {
-        console.log("当前没有已保存的微信账号。先执行 `npm run login`。");
+        console.log("No saved WeChat account found. Run `npm run login` first.");
         return;
       }
-      console.log("已保存账号：");
+      console.log("Saved accounts:");
       for (const account of accounts) {
         console.log(`- ${account.accountId}`);
         console.log(`  userId: ${account.userId || "(unknown)"}`);
@@ -149,14 +143,15 @@ function createWeixinChannelAdapter(config) {
     rememberContextToken,
     async getUpdates({ syncBuffer = "", timeoutMs = LONG_POLL_TIMEOUT_MS } = {}) {
       const account = ensureAccount();
-      const response = await getUpdatesV2({
+      const response = await getUpdates({
         baseUrl: account.baseUrl,
         token: account.token,
         getUpdatesBuf: syncBuffer,
         timeoutMs,
       });
-      if (typeof response?.get_updates_buf === "string" && response.get_updates_buf.trim()) {
-        this.saveSyncBuffer(response.get_updates_buf.trim());
+      const newBuf = typeof response?.get_updates_buf === "string" ? response.get_updates_buf.trim() : "";
+      if (newBuf && newBuf !== syncBuffer) {
+        this.saveSyncBuffer(newBuf);
       }
       const messages = Array.isArray(response?.msgs) ? response.msgs : [];
       for (const message of messages) {
@@ -207,7 +202,7 @@ function createWeixinChannelAdapter(config) {
       const account = ensureAccount();
       const resolvedToken = resolveContextToken(userId, contextToken);
       if (!resolvedToken) {
-        throw new Error(`缺少 context_token，无法发送文件给用户 ${userId}`);
+        throw new Error(`Missing context_token. Cannot send a file to user ${userId}.`);
       }
       return sendWeixinMediaFile({
         filePath,
@@ -218,12 +213,18 @@ function createWeixinChannelAdapter(config) {
         cdnBaseUrl: config.weixinCdnBaseUrl,
       });
     },
+    setMinChunkChars(value) {
+      const parsed = Number.parseInt(String(value), 10);
+      if (Number.isFinite(parsed) && parsed >= 1 && parsed <= MAX_WEIXIN_CHUNK) {
+        minWeixinChunk = parsed;
+        saveWeixinConfig(config, { minChunkChars: minWeixinChunk });
+      }
+      return minWeixinChunk;
+    },
+    getMinChunkChars() {
+      return minWeixinChunk;
+    },
   };
-}
-
-function normalizeAdapterVariant(value) {
-  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
-  return normalized === "legacy" ? "legacy" : "v2";
 }
 
 function splitUtf8(text, maxRunes) {
@@ -238,13 +239,24 @@ function splitUtf8(text, maxRunes) {
   return chunks;
 }
 
-function compactPlainTextForWeixin(text) {
-  const normalized = String(text || "").replace(/\r\n/g, "\n");
-  return trimOuterBlankLines(normalized.replace(/\n\s*\n+/g, "\n"));
+function normalizeWeixinReplyText(text) {
+  return trimOuterBlankLines(normalizeLineEndings(text));
+}
+
+function finalizeWeixinDeliveryChunk(text) {
+  const normalized = normalizeLineEndings(text);
+  if (!normalized.trim()) {
+    return "";
+  }
+  return trimOuterBlankLines(stripChunkTailChineseFullStops(normalized));
+}
+
+function stripChunkTailChineseFullStops(text) {
+  return String(text || "").replace(/(^|[^。])。(?=(?:\s*["'"”’）)\]\u300d\u300f\u3011》])*\s*$)/u, "$1");
 }
 
 function chunkReplyText(text, limit = 3500) {
-  const normalized = trimOuterBlankLines(String(text || "").replace(/\r\n/g, "\n"));
+  const normalized = normalizeWeixinReplyText(text);
   if (!normalized.trim()) {
     return [];
   }
@@ -252,20 +264,10 @@ function chunkReplyText(text, limit = 3500) {
   const chunks = [];
   let remaining = normalized;
   while (remaining.length > limit) {
-    const candidate = remaining.slice(0, limit);
-    const splitIndex = Math.max(
-      candidate.lastIndexOf("\n\n"),
-      candidate.lastIndexOf("\n"),
-      candidate.lastIndexOf("。"),
-      candidate.lastIndexOf(". "),
-      candidate.lastIndexOf(" ")
-    );
-    const cut = splitIndex > limit * 0.4 ? splitIndex + (candidate[splitIndex] === "\n" ? 0 : 1) : limit;
-    const chunk = trimOuterBlankLines(remaining.slice(0, cut));
-    if (chunk.trim()) {
-      chunks.push(chunk);
-    }
-    remaining = trimOuterBlankLines(remaining.slice(cut));
+    const minBoundary = Math.floor(limit * 0.4);
+    const cut = findLastPreferredBoundary(remaining, limit, minBoundary) || limit;
+    chunks.push(remaining.slice(0, cut));
+    remaining = remaining.slice(cut);
   }
   if (remaining) {
     chunks.push(remaining);
@@ -273,53 +275,57 @@ function chunkReplyText(text, limit = 3500) {
   return chunks.filter(Boolean);
 }
 
-function chunkReplyTextForWeixin(text, limit = 80) {
-  const normalized = trimOuterBlankLines(String(text || "").replace(/\r\n/g, "\n"));
+function chunkReplyTextForWeixin(text, minChunk = DEFAULT_MIN_WEIXIN_CHUNK) {
+  const normalized = normalizeWeixinReplyText(text);
   if (!normalized.trim()) {
     return [];
   }
 
   const boundaries = collectStreamingBoundaries(normalized);
   if (!boundaries.length) {
-    return chunkReplyText(normalized, limit);
+    return chunkReplyText(normalized, MAX_WEIXIN_CHUNK);
   }
 
-  const units = [];
-  let start = 0;
-  for (const boundary of boundaries) {
-    if (boundary <= start) {
-      continue;
-    }
-    const unit = trimOuterBlankLines(normalized.slice(start, boundary));
-    if (unit) {
-      units.push(unit);
-    }
-    start = boundary;
-  }
-
-  const tail = trimOuterBlankLines(normalized.slice(start));
-  if (tail) {
-    units.push(tail);
-  }
-
+  const units = splitTextAtBoundaries(normalized, boundaries);
   if (!units.length) {
-    return chunkReplyText(normalized, limit);
+    return chunkReplyText(normalized, MAX_WEIXIN_CHUNK);
   }
 
   const chunks = [];
   for (const unit of units) {
-    if (unit.length <= limit) {
+    if (unit.length <= MAX_WEIXIN_CHUNK) {
       chunks.push(unit);
       continue;
     }
-    chunks.push(...chunkReplyText(unit, limit));
+    chunks.push(...chunkReplyText(unit, MAX_WEIXIN_CHUNK));
   }
-  return chunks.filter(Boolean);
+  return mergeShortChunks(chunks.filter(Boolean), MAX_WEIXIN_CHUNK, minChunk);
+}
+
+function mergeShortChunks(chunks, maxLength, minLength) {
+  if (!chunks.length) {
+    return chunks;
+  }
+  const merged = [];
+  let buffer = chunks[0];
+  for (let index = 1; index < chunks.length; index += 1) {
+    const chunk = chunks[index];
+    const isShort = buffer.length < minLength && chunk.length < minLength;
+    const joined = `${buffer}${chunk}`;
+    if (isShort && joined.length <= maxLength) {
+      buffer = joined;
+    } else {
+      merged.push(buffer);
+      buffer = chunk;
+    }
+  }
+  merged.push(buffer);
+  return merged;
 }
 
 function packChunksForWeixinDelivery(chunks, maxMessages = 10, maxChunkChars = 3800) {
   const normalizedChunks = Array.isArray(chunks)
-    ? chunks.map((chunk) => compactPlainTextForWeixin(chunk)).filter(Boolean)
+    ? chunks.map((chunk) => normalizeLineEndings(chunk)).filter((chunk) => chunk.trim())
     : [];
   if (!normalizedChunks.length || normalizedChunks.length <= maxMessages) {
     return normalizedChunks;
@@ -331,7 +337,7 @@ function packChunksForWeixinDelivery(chunks, maxMessages = 10, maxChunkChars = 3
     return packed;
   }
 
-  const tailText = compactPlainTextForWeixin(tailChunks.join("\n")) || "已完成。";
+  const tailText = tailChunks.join("") || "Completed.";
   if (tailText.length <= maxChunkChars) {
     packed.push(tailText);
     return packed;
@@ -349,7 +355,7 @@ function packChunksForWeixinDelivery(chunks, maxMessages = 10, maxChunkChars = 3
   const groupedTail = [];
   let current = "";
   for (const chunk of rebundledTail) {
-    const joined = current ? `${current}\n${chunk}` : chunk;
+    const joined = current ? `${current}${chunk}` : chunk;
     if (current && joined.length > maxChunkChars) {
       groupedTail.push(current);
       current = chunk;
@@ -361,7 +367,42 @@ function packChunksForWeixinDelivery(chunks, maxMessages = 10, maxChunkChars = 3
     groupedTail.push(current);
   }
 
-  return preserved.concat(groupedTail.map((item) => compactPlainTextForWeixin(item) || "已完成。")).slice(0, maxMessages);
+  return preserved.concat(groupedTail.map((item) => normalizeLineEndings(item) || "Completed.")).slice(0, maxMessages);
+}
+
+function splitTextAtBoundaries(text, boundaries) {
+  const units = [];
+  let start = 0;
+  for (const boundary of boundaries) {
+    if (boundary <= start) {
+      continue;
+    }
+    const unit = text.slice(start, boundary);
+    if (unit.trim()) {
+      units.push(unit);
+    }
+    start = boundary;
+  }
+  const tail = text.slice(start);
+  if (tail.trim()) {
+    units.push(tail);
+  }
+  return units;
+}
+
+function findLastPreferredBoundary(text, maxBoundary = text.length, minBoundary = 0) {
+  const boundaries = collectStreamingBoundaries(text);
+  for (let index = boundaries.length - 1; index >= 0; index -= 1) {
+    const boundary = boundaries[index];
+    if (boundary > maxBoundary) {
+      continue;
+    }
+    if (boundary > minBoundary) {
+      return boundary;
+    }
+    break;
+  }
+  return 0;
 }
 
 function collectStreamingBoundaries(text) {
@@ -382,22 +423,46 @@ function collectStreamingBoundaries(text) {
   }
 
   for (let index = 0; index < text.length; index += 1) {
-    const char = text[index];
-    if (!/[。！？!?]/.test(char)) {
+    const endOfPunctuation = findBoundaryPunctuationEnd(text, index);
+    if (!endOfPunctuation) {
       continue;
     }
 
-    let end = index + 1;
-    while (end < text.length && /["'”’）)\]」』】]/.test(text[end])) {
+    let end = endOfPunctuation;
+    while (end < text.length && /["'"”’）)\]\u300d\u300f\u3011》]/u.test(text[end])) {
       end += 1;
     }
     while (end < text.length && /[\t \n]/.test(text[end])) {
       end += 1;
     }
     boundaries.add(end);
+    index = endOfPunctuation - 1;
   }
 
   return Array.from(boundaries).sort((left, right) => left - right);
+}
+
+function findBoundaryPunctuationEnd(text, index) {
+  const char = text[index];
+  if (/[\u3002\uff01\uff1f!?]/u.test(char)) {
+    return consumeRepeatedChar(text, index, char);
+  }
+  if (char === ".") {
+    const end = consumeRepeatedChar(text, index, ".");
+    return end - index >= 3 ? end : 0;
+  }
+  if (char === "…") {
+    return consumeRepeatedChar(text, index, "…");
+  }
+  return 0;
+}
+
+function consumeRepeatedChar(text, index, char) {
+  let end = index + 1;
+  while (end < text.length && text[end] === char) {
+    end += 1;
+  }
+  return end;
 }
 
 function trimOuterBlankLines(text) {
@@ -406,8 +471,27 @@ function trimOuterBlankLines(text) {
     .replace(/\n+\s*$/g, "");
 }
 
+function normalizeLineEndings(text) {
+  return String(text || "").replace(/\r\n/g, "\n");
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-module.exports = { createWeixinChannelAdapter };
+module.exports = {
+  createWeixinChannelAdapter,
+  splitUtf8,
+  normalizeWeixinReplyText,
+  finalizeWeixinDeliveryChunk,
+  stripChunkTailChineseFullStops,
+  chunkReplyText,
+  chunkReplyTextForWeixin,
+  mergeShortChunks,
+  packChunksForWeixinDelivery,
+  splitTextAtBoundaries,
+  findLastPreferredBoundary,
+  collectStreamingBoundaries,
+  findBoundaryPunctuationEnd,
+  trimOuterBlankLines,
+};

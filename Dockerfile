@@ -1,6 +1,7 @@
 FROM node:22-alpine
 
 ARG CODEX_VERSION=latest
+ARG INSTALL_CLAUDE_CODE=false
 
 RUN apk add --no-cache \
     bash \
@@ -21,6 +22,11 @@ ENV TIMELINE_FOR_AGENT_CHROME_PATH=/usr/bin/chromium
 ENV CODEX_VERSION=${CODEX_VERSION}
 
 RUN npm install -g "@openai/codex@${CODEX_VERSION}"
+
+# Install Claude Code if requested
+RUN if [ "$INSTALL_CLAUDE_CODE" = "true" ]; then \
+      npm install -g @anthropic-ai/claude-code; \
+    fi
 
 WORKDIR /app
 

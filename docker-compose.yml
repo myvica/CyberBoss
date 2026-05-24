@@ -6,10 +6,12 @@ services:
     #   dockerfile: Dockerfile
     #   args:
     #     CODEX_VERSION: ${CODEX_VERSION:-latest}
+    #     INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-false}
     container_name: cyberboss-gateway
     restart: always
     environment:
       - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - CYBERBOSS_RUNTIME=${CYBERBOSS_RUNTIME:-codex}
       - CYBERBOSS_CODEX_ENDPOINT=ws://localhost:8765
       - CYBERBOSS_CODEX_ACCESS_MODE=${CYBERBOSS_CODEX_ACCESS_MODE:-full-access}
       - CYBERBOSS_USER_NAME=${CYBERBOSS_USER_NAME}
@@ -18,6 +20,14 @@ services:
       - CYBERBOSS_WORKSPACE_ROOT=/app
       - CYBERBOSS_SCREENSHOT_CHROME_PATH=/usr/bin/chromium
       - TIMELINE_FOR_AGENT_CHROME_PATH=/usr/bin/chromium
+      # Claude Code configuration
+      - CYBERBOSS_CLAUDE_COMMAND=${CYBERBOSS_CLAUDE_COMMAND:-claude}
+      - CYBERBOSS_CLAUDE_MODEL=${CYBERBOSS_CLAUDE_MODEL:-}
+      - CYBERBOSS_CLAUDE_CONTEXT_WINDOW=${CYBERBOSS_CLAUDE_CONTEXT_WINDOW:-}
+      - CYBERBOSS_CLAUDE_PERMISSION_MODE=${CYBERBOSS_CLAUDE_PERMISSION_MODE:-default}
+      - CYBERBOSS_CLAUDE_DISABLE_VERBOSE=${CYBERBOSS_CLAUDE_DISABLE_VERBOSE:-false}
+      - CYBERBOSS_CLAUDE_EXTRA_ARGS=${CYBERBOSS_CLAUDE_EXTRA_ARGS:-}
+      - CLAUDE_CODE_MAX_OUTPUT_TOKENS=${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-}
     volumes:
       - .:/app
       - /app/node_modules

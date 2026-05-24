@@ -1,50 +1,96 @@
-const os = require("os");
+﻿const os = require("os");
 const path = require("path");
 const crypto = require("crypto");
 const fs = require("fs");
 const { createWeixinChannelAdapter } = require("../adapters/channel/weixin");
+const { DEFAULT_MIN_WEIXIN_CHUNK, MAX_MIN_WEIXIN_CHUNK } = require("../adapters/channel/weixin/config-store");
 const { persistIncomingWeixinAttachments } = require("../adapters/channel/weixin/media-receive");
 const { createCodexRuntimeAdapter } = require("../adapters/runtime/codex");
+const { createClaudeCodeRuntimeAdapter } = require("../adapters/runtime/claudecode");
 const { findModelByQuery } = require("../adapters/runtime/codex/model-catalog");
 const { createTimelineIntegration } = require("../integrations/timeline");
-const { buildWeixinHelpText } = require("./command-registry");
-const { resolvePreferredSenderId } = require("./default-targets");
+const {
+  assembleRuntimeTurnText,
+  buildInboundDraft,
+  buildMergedInboundPrepared,
+  clonePreparedInboundMessage,
+  isPlainTextPreparedMessage,
+  shouldBatchImageOnlyInbound,
+  takeImageOnlyBatchMessages,
+} = require("./inbound-turn");
+const { resolveVisionContext } = require("../services/vision-context");
+const {
+  buildWeixinHelpText,
+} = require("./command-registry");
+const { CheckinConfigStore, parseCheckinRangeMinutes, resolveDefaultCheckinRange } = require("./checkin-config-store");
+const { resolvePreferredSenderId, resolvePreferredWorkspaceRoot } = require("./default-targets");
 const { StreamDelivery } = require("./stream-delivery");
 const { ThreadStateStore } = require("./thread-state-store");
+const { DeferredSystemReplyStore } = require("./deferred-system-reply-store");
 const { SystemMessageQueueStore } = require("./system-message-queue-store");
 const { SystemMessageDispatcher } = require("./system-message-dispatcher");
 const { TimelineScreenshotQueueStore } = require("./timeline-screenshot-queue-store");
+const { TurnGateStore } = require("./turn-gate-store");
 const { ReminderQueueStore } = require("../adapters/channel/weixin/reminder-queue-store");
+const {
+  matchesCommandPrefix,
+  canonicalizeCommandTokens,
+  extractApprovalFilePaths,
+  isPathWithinRoot,
+  normalizeCommandTokens,
+  splitCommandLine,
+} = require("../adapters/runtime/shared/approval-command");
 const { runSystemCheckinPoller } = require("../app/system-checkin-poller");
-
+const { createProjectTooling } = require("../tools/create-project-tooling");
 const DEFAULT_LONG_POLL_TIMEOUT_MS = 35_000;
 const MIN_LONG_POLL_TIMEOUT_MS = 2_000;
 const SESSION_EXPIRED_ERRCODE = -14;
 const RETRY_DELAY_MS = 2_000;
 const BACKOFF_DELAY_MS = 30_000;
 const MAX_CONSECUTIVE_FAILURES = 3;
-const FIRST_RUNTIME_EVENT_NOTICE_TIMEOUT_MS = 8_000;
-const FIRST_RUNTIME_EVENT_FAILURE_TIMEOUT_MS = 45_000;
+const MAX_INBOUND_STICKER_IMAGE_BATCH = 10;
+const INBOUND_IMAGE_BATCH_IDLE_MS = 1_500;
+
+function createRuntimeAdapter(config) {
+  if (config.runtime === "claudecode") {
+    return createClaudeCodeRuntimeAdapter(config);
+  }
+  return createCodexRuntimeAdapter(config);
+}
 
 class CyberbossApp {
   constructor(config) {
     this.config = config;
     this.channelAdapter = createWeixinChannelAdapter(config);
-    this.runtimeAdapter = createCodexRuntimeAdapter(config);
     this.timelineIntegration = createTimelineIntegration(config);
+    const projectTooling = createProjectTooling(config, {
+      channelAdapter: this.channelAdapter,
+      timelineIntegration: this.timelineIntegration,
+    });
+    this.projectServices = projectTooling.services;
+    this.projectToolHost = projectTooling.toolHost;
+    this.runtimeContextStore = projectTooling.runtimeContextStore;
+    this.runtimeAdapter = createRuntimeAdapter(config);
     this.threadStateStore = new ThreadStateStore();
     this.systemMessageQueue = new SystemMessageQueueStore({ filePath: config.systemMessageQueueFile });
+    this.deferredSystemReplyQueue = new DeferredSystemReplyStore({ filePath: config.deferredSystemReplyQueueFile });
+    this.checkinConfigStore = new CheckinConfigStore({ filePath: config.checkinConfigFile });
     this.timelineScreenshotQueue = new TimelineScreenshotQueueStore({ filePath: config.timelineScreenshotQueueFile });
     this.reminderQueue = new ReminderQueueStore({ filePath: config.reminderQueueFile });
+    this.turnGateStore = new TurnGateStore();
+    this.pendingInboundByScope = new Map();
+    this.pendingImageInboundByScope = new Map();
+    this.turnBoundaryScopeKeys = new Set();
     this.systemMessageDispatcher = null;
     this.streamDelivery = new StreamDelivery({
       channelAdapter: this.channelAdapter,
       sessionStore: this.runtimeAdapter.getSessionStore(),
+      runtimeId: this.runtimeAdapter.describe().id,
+      onDeferredSystemReply: (payload) => this.deferSystemReply(payload),
     });
-    this.pendingRuntimeEventWatchdogs = new Map();
+    this.pendingOperationByRunKey = new Map();
     this.runtimeEventChain = Promise.resolve();
     this.runtimeAdapter.onEvent((event) => {
-      this.clearRuntimeEventWatchdog(event?.payload?.threadId);
       this.threadStateStore.applyRuntimeEvent(event);
       this.runtimeEventChain = this.runtimeEventChain
         .catch(() => {})
@@ -98,9 +144,12 @@ class CyberbossApp {
     console.log(`[cyberboss] codexAccessMode=${this.config.codexAccessMode || "workspace-write"}`);
     console.log(`[cyberboss] knownContextTokens=${knownContextTokens}`);
     console.log(`[cyberboss] syncBuffer=${syncBuffer ? "ready" : "empty"}`);
-    console.log(`[cyberboss] codexEndpoint=${runtimeState.endpoint}`);
-    console.log(`[cyberboss] codexModels=${runtimeState.models.length}`);
-    console.log("[cyberboss] 最小消息链路已启动，正在等待微信消息。");
+    console.log(`[cyberboss] runtimeEndpoint=${runtimeState.endpoint || runtimeState.command || "(spawn)"}`);
+    console.log(`[cyberboss] runtimeModels=${runtimeState.models?.length || 0}`);
+    if (this.config.startWithLocationServer) {
+      await this.ensureLocationServerStarted();
+    }
+    console.log("[cyberboss] bridge loop started; waiting for WeChat messages.");
     if (this.config.startWithCheckin) {
       console.log("[cyberboss] checkin: enabled");
       void runSystemCheckinPoller(this.config).catch((error) => {
@@ -109,6 +158,8 @@ class CyberbossApp {
     }
 
     const shutdown = createShutdownController(async () => {
+      this.clearPendingImageInboundTimers();
+      await this.closeLocationServer();
       await this.runtimeAdapter.close();
     });
 
@@ -116,32 +167,38 @@ class CyberbossApp {
       let consecutiveFailures = 0;
       while (!shutdown.stopped) {
         try {
-          await this.flushDueReminders(account);
-          await this.flushPendingSystemMessages();
-          await this.flushPendingTimelineScreenshots(account);
+          await Promise.all([
+            this.flushDueReminders(account),
+            this.flushPendingInboundMessages(),
+            this.flushPendingSystemMessages(),
+            this.flushPendingTimelineScreenshots(account),
+          ]);
           const response = await this.channelAdapter.getUpdates({
             syncBuffer: this.channelAdapter.loadSyncBuffer(),
             timeoutMs: this.resolveLongPollTimeoutMs(),
           });
           assertWeixinUpdateResponse(response);
           consecutiveFailures = 0;
-          const messages = Array.isArray(response?.msgs) ? response.msgs : [];
+          const messages = sortInboundUpdateMessages(Array.isArray(response?.msgs) ? response.msgs : []);
           for (const message of messages) {
             if (shutdown.stopped) {
               break;
             }
             await this.handleIncomingMessage(message);
           }
-          await this.flushDueReminders(account);
-          await this.flushPendingSystemMessages();
-          await this.flushPendingTimelineScreenshots(account);
+          await Promise.all([
+            this.flushDueReminders(account),
+            this.flushPendingInboundMessages(),
+            this.flushPendingSystemMessages(),
+            this.flushPendingTimelineScreenshots(account),
+          ]);
         } catch (error) {
           if (shutdown.stopped) {
             break;
           }
 
           if (isSessionExpiredError(error)) {
-            throw new Error("微信会话已失效，请重新执行 `npm run login`");
+            throw new Error("The WeChat session has expired. Run `npm run login` again.");
           }
 
           consecutiveFailures += 1;
@@ -151,88 +208,120 @@ class CyberbossApp {
       }
     } finally {
       shutdown.dispose();
+      this.clearPendingImageInboundTimers();
+      await this.closeLocationServer();
       await this.runtimeAdapter.close();
     }
   }
 
-  async sendTimelineScreenshot({ senderId = "", args = [], outputFile = "" } = {}) {
-    const targetUserId = normalizeText(senderId) || this.resolveDefaultTerminalUser();
-    if (!targetUserId) {
-      throw new Error("无法确定时间轴截图要发送给哪个微信用户，先配置 CYBERBOSS_ALLOWED_USER_IDS");
+  async ensureLocationServerStarted() {
+    if (!this.projectServices?.whereabouts) {
+      return null;
     }
-    const contextToken = this.channelAdapter.getKnownContextTokens()[targetUserId] || "";
-    if (!contextToken) {
-      throw new Error(`找不到用户 ${targetUserId} 的 context token，先让这个用户和 bot 聊过一次`);
-    }
-
-    const normalizedArgs = Array.isArray(args)
-      ? args.map((value) => String(value ?? "")).filter(Boolean)
-      : [];
-    const resolvedOutputFile = normalizeText(outputFile) || resolveTimelineScreenshotOutput(normalizedArgs);
-    const finalArgs = resolvedOutputFile
-      ? normalizedArgs
-      : [...normalizedArgs, "--output", path.join(os.tmpdir(), `cyberboss-timeline-${Date.now()}.png`)];
-    const savedPath = resolveTimelineScreenshotOutput(finalArgs);
-
-    await this.channelAdapter.sendTyping({
-      userId: targetUserId,
-      status: 1,
-      contextToken,
-    }).catch(() => {});
-    await this.timelineIntegration.runSubcommand("screenshot", finalArgs);
-    await this.channelAdapter.sendFile({
-      userId: targetUserId,
-      filePath: savedPath,
-      contextToken,
+    await this.projectServices.whereabouts.startServer({
+      onAccepted: (result) => this.handleLocationAccepted(result),
     });
-    await this.channelAdapter.sendTyping({
-      userId: targetUserId,
-      status: 0,
-      contextToken,
-    }).catch(() => {});
-    return { userId: targetUserId, filePath: savedPath };
+    console.log(
+      `[cyberboss] locationServer=http://${this.config.locationHost}:${this.config.locationPort} store=${this.config.locationStoreFile}`
+    );
+    return this.projectServices.whereabouts.server || null;
+  }
+
+  async closeLocationServer() {
+    if (!this.projectServices?.whereabouts) {
+      return;
+    }
+    await this.projectServices.whereabouts.closeServer();
+  }
+
+  handleLocationAccepted(result) {
+    if (!this.activeAccountId) {
+      return;
+    }
+
+    const point = result?.appended?.point || null;
+    const movementEvent = result?.appended?.movementEvent || null;
+    const triggerText = buildLocationTriggerSystemText(point?.trigger);
+    if (!triggerText && !movementEvent) {
+      return;
+    }
+
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const senderId = resolvePreferredSenderId({
+      config: this.config,
+      accountId: this.activeAccountId,
+      sessionStore,
+    });
+    const workspaceRoot = resolvePreferredWorkspaceRoot({
+      config: this.config,
+      accountId: this.activeAccountId,
+      senderId,
+      sessionStore,
+    });
+    if (!senderId || !workspaceRoot) {
+      return;
+    }
+
+    if (triggerText && point?.id) {
+      this.systemMessageQueue.enqueue({
+        id: `location-trigger:${point.id}`,
+        accountId: this.activeAccountId,
+        senderId,
+        workspaceRoot,
+        text: triggerText,
+        createdAt: normalizeIsoTime(point?.receivedAt) || normalizeIsoTime(point?.timestamp) || new Date().toISOString(),
+      });
+    }
+
+    if (movementEvent) {
+      this.systemMessageQueue.enqueue({
+        id: `location-move:${movementEvent.id}`,
+        accountId: this.activeAccountId,
+        senderId,
+        workspaceRoot,
+        text: buildLocationMovementSystemText(movementEvent),
+        createdAt: normalizeIsoTime(movementEvent?.movedAt) || new Date().toISOString(),
+      });
+    }
+  }
+
+  async sendTimelineScreenshot({
+    senderId = "",
+    outputFile = "",
+    selector = "",
+    range = "",
+    date = "",
+    week = "",
+    month = "",
+    category = "",
+    subcategory = "",
+    width = 0,
+    height = 0,
+    sidePadding = undefined,
+    locale = "",
+  } = {}) {
+    return this.projectServices.timeline.queueScreenshot({
+      userId: senderId,
+      outputFile,
+      selector,
+      range,
+      date,
+      week,
+      month,
+      category,
+      subcategory,
+      width,
+      height,
+      sidePadding,
+      locale,
+    }, {});
   }
 
   async sendLocalFileToCurrentChat({ senderId = "", filePath = "" } = {}) {
-    const targetUserId = normalizeText(senderId) || this.resolveDefaultTerminalUser();
-    if (!targetUserId) {
-      throw new Error("无法确定文件要发送给哪个微信用户，先配置 CYBERBOSS_ALLOWED_USER_IDS");
-    }
-
-    const contextToken = this.channelAdapter.getKnownContextTokens()[targetUserId] || "";
-    if (!contextToken) {
-      throw new Error(`找不到用户 ${targetUserId} 的 context token，先让这个用户和 bot 聊过一次`);
-    }
-
-    const requestedPath = normalizeText(filePath);
-    if (!requestedPath) {
-      throw new Error("缺少要发送的文件路径");
-    }
-    const resolvedPath = path.resolve(requestedPath);
-    if (!fs.existsSync(resolvedPath)) {
-      throw new Error(`文件不存在: ${resolvedPath}`);
-    }
-    const stat = fs.statSync(resolvedPath);
-    if (!stat.isFile()) {
-      throw new Error(`只能发送文件，不能发送目录: ${resolvedPath}`);
-    }
-
-    await this.channelAdapter.sendTyping({
-      userId: targetUserId,
-      status: 1,
-      contextToken,
-    }).catch(() => {});
-    await this.channelAdapter.sendFile({
-      userId: targetUserId,
-      filePath: resolvedPath,
-      contextToken,
-    });
-    await this.channelAdapter.sendTyping({
-      userId: targetUserId,
-      status: 0,
-      contextToken,
-    }).catch(() => {});
-    return { userId: targetUserId, filePath: resolvedPath };
+    return this.projectServices.channelFile.sendToCurrentChat({
+      userId: senderId,
+      filePath,
+    }, {});
   }
 
   async handleIncomingMessage(message) {
@@ -241,15 +330,41 @@ class CyberbossApp {
       return;
     }
 
+    this.primeDeferredRepliesForSender(normalized);
     await this.handlePreparedMessage(normalized, { allowCommands: true });
   }
 
-  resolveDefaultTerminalUser() {
-    return resolvePreferredSenderId({
-      config: this.config,
-      accountId: this.channelAdapter.resolveAccount().accountId,
-      sessionStore: this.runtimeAdapter.getSessionStore(),
+  deferSystemReply({ threadId = "", userId = "", text = "", error = null, kind = "plain_reply" }) {
+    return this.deferredSystemReplyQueue.enqueue({
+      id: `${normalizeCommandArgument(threadId) || "system"}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      accountId: this.activeAccountId || this.channelAdapter.resolveAccount().accountId,
+      senderId: userId,
+      threadId,
+      text,
+      kind,
+      createdAt: new Date().toISOString(),
+      failedAt: new Date().toISOString(),
+      lastError: error instanceof Error ? error.message : String(error || ""),
     });
+  }
+
+  primeDeferredRepliesForSender(normalized) {
+    if (!normalized?.accountId || !normalized?.senderId || !normalized?.contextToken) {
+      return;
+    }
+    const pendingReplies = this.deferredSystemReplyQueue.drainForSender(normalized.accountId, normalized.senderId);
+    if (!pendingReplies.length) {
+      return;
+    }
+    const bindingKey = this.runtimeAdapter.getSessionStore().buildBindingKey({
+      workspaceId: normalized.workspaceId,
+      accountId: normalized.accountId,
+      senderId: normalized.senderId,
+    });
+    this.streamDelivery.setDeferredReplyPrefix(bindingKey, formatDeferredSystemReplyBatch(pendingReplies));
+    console.warn(
+      `[cyberboss] queued deferred reply prefix sender=${normalized.senderId} count=${pendingReplies.length}`
+    );
   }
 
   async handlePreparedMessage(normalized, { allowCommands }) {
@@ -276,138 +391,407 @@ class CyberbossApp {
       return;
     }
 
+    if (shouldBatchImageOnlyInbound(prepared)) {
+      this.enqueuePendingImageInbound({ bindingKey, workspaceRoot, prepared });
+      return;
+    }
+
+    if (this.hasPendingImageInbound(bindingKey, workspaceRoot) && isPlainTextPreparedMessage(prepared)) {
+      const merged = await this.flushPendingImageInboundBatch({
+        bindingKey,
+        workspaceRoot,
+        trailingPrepared: prepared,
+      });
+      if (merged) {
+        return;
+      }
+    }
+
+    if (this.hasPendingImageInbound(bindingKey, workspaceRoot)) {
+      await this.flushPendingImageInboundBatch({ bindingKey, workspaceRoot });
+    }
+
+    await this.routePreparedInbound({ bindingKey, workspaceRoot, prepared });
+  }
+
+  isTurnDispatchBlocked(bindingKey, workspaceRoot, { ignoreBoundary = false } = {}) {
+    const scopeKey = buildScopeKey(bindingKey, workspaceRoot);
+    if (!ignoreBoundary && scopeKey && this.turnBoundaryScopeKeys?.has(scopeKey)) {
+      return true;
+    }
+    if (this.turnGateStore.isPending(bindingKey, workspaceRoot)) {
+      return true;
+    }
+    const threadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot);
+    const threadState = threadId ? this.threadStateStore.getThreadState(threadId) : null;
+    return threadState?.status === "running" || hasRpcId(threadState?.pendingApproval?.requestId);
+  }
+
+  async dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared }) {
+    const pendingScopeKey = this.turnGateStore.begin(bindingKey, workspaceRoot);
     await this.channelAdapter.sendTyping({
-      userId: normalized.senderId,
+      userId: prepared.senderId,
       status: 1,
-      contextToken: normalized.contextToken,
+      contextToken: prepared.contextToken,
     }).catch(() => {});
 
     try {
-      const turn = await this.runtimeAdapter.sendTextTurn({
+      const model = this.runtimeAdapter.getSessionStore().getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model;
+      const runtimeTurn = await this.buildRuntimeTurn({ prepared, model });
+      const sendTurn = typeof this.runtimeAdapter.sendTurn === "function"
+        ? this.runtimeAdapter.sendTurn.bind(this.runtimeAdapter)
+        : this.runtimeAdapter.sendTextTurn.bind(this.runtimeAdapter);
+      const turn = await sendTurn({
         bindingKey,
         workspaceRoot,
-        text: prepared.text,
-        model: this.runtimeAdapter.getSessionStore().getCodexParamsForWorkspace(bindingKey, workspaceRoot).model,
+        text: runtimeTurn.text,
+        attachments: runtimeTurn.attachments,
+        model,
         metadata: {
           workspaceId: prepared.workspaceId,
           accountId: prepared.accountId,
           senderId: prepared.senderId,
         },
       });
-      this.streamDelivery.queueReplyTargetForThread(turn.threadId, {
+      this.runtimeContextStore?.setActiveContext?.({
+        workspaceRoot,
+        runtimeId: this.runtimeAdapter.describe().id,
+        threadId: turn.threadId,
+        bindingKey,
+        accountId: prepared.accountId,
+        senderId: prepared.senderId,
+      });
+      this.turnGateStore.attachThread(pendingScopeKey, turn.threadId);
+      const replyTarget = {
         userId: prepared.senderId,
         contextToken: prepared.contextToken,
         provider: prepared.provider,
-      });
-      this.scheduleRuntimeEventWatchdog({
-        bindingKey,
-        workspaceRoot,
-        normalized: prepared,
-        threadId: turn.threadId,
-      });
+      };
+      if (turn.turnId) {
+        this.streamDelivery.bindReplyTargetForTurn({
+          threadId: turn.threadId,
+          turnId: turn.turnId,
+          target: replyTarget,
+        });
+      } else {
+        this.streamDelivery.queueReplyTargetForThread(turn.threadId, replyTarget);
+      }
+      return true;
     } catch (error) {
+      this.turnGateStore.releaseScope(bindingKey, workspaceRoot);
       const messageText = error instanceof Error ? error.message : String(error || "unknown error");
       await this.channelAdapter.sendText({
-        userId: normalized.senderId,
-        text: `处理失败：${messageText}`,
-        contextToken: normalized.contextToken,
+        userId: prepared.senderId,
+        text: `❌ Request failed\n${messageText}`,
+        contextToken: prepared.contextToken,
       }).catch(() => {});
+      return false;
     }
   }
 
-  scheduleRuntimeEventWatchdog({ bindingKey, workspaceRoot, normalized, threadId = "" }) {
-    const sessionStore = this.runtimeAdapter.getSessionStore();
-    const candidateThreadId = normalizeCommandArgument(threadId)
-      || sessionStore.getThreadIdForWorkspace(bindingKey, workspaceRoot);
-    const normalizedThreadId = normalizeCommandArgument(candidateThreadId);
-    if (!normalizedThreadId) {
-      return;
+  async buildRuntimeTurn({ prepared, model = "" }) {
+    if (prepared?.provider === "system") {
+      return {
+        text: String(prepared.text || "").trim(),
+        attachments: [],
+      };
     }
-
-    this.clearRuntimeEventWatchdog(normalizedThreadId);
-    const noticeTimer = setTimeout(async () => {
-      const watchdog = this.pendingRuntimeEventWatchdogs.get(normalizedThreadId);
-      if (!watchdog) {
-        return;
-      }
-      const currentThreadState = this.threadStateStore.getThreadState(normalizedThreadId);
-      if (currentThreadState?.status === "running" || currentThreadState?.turnId) {
-        return;
-      }
-      watchdog.noticeSent = true;
-      await this.channelAdapter.sendText({
-        userId: normalized.senderId,
-        contextToken: normalized.contextToken,
-        preserveBlock: true,
-        text: [
-          "这条消息已经发到 bridge，但 Codex runtime 还没有返回首个事件。",
-          "如果你看到 terminal 正在 reconnecting，这一轮大概率还卡在共享线程启动阶段。",
-          "先不用一直空等；如果稍后连上，消息会继续往下跑。",
-          `workspace: ${workspaceRoot}`,
-          `thread: ${normalizedThreadId}`,
-        ].join("\n"),
-      }).catch(() => {});
-    }, FIRST_RUNTIME_EVENT_NOTICE_TIMEOUT_MS);
-    const failureTimer = setTimeout(async () => {
-      this.pendingRuntimeEventWatchdogs.delete(normalizedThreadId);
-      const currentThreadState = this.threadStateStore.getThreadState(normalizedThreadId);
-      if (currentThreadState?.status === "running" || currentThreadState?.turnId) {
-        return;
-      }
-      await this.channelAdapter.sendTyping({
-        userId: normalized.senderId,
-        status: 0,
-        contextToken: normalized.contextToken,
-      }).catch(() => {});
-      await this.channelAdapter.sendText({
-        userId: normalized.senderId,
-        contextToken: normalized.contextToken,
-        preserveBlock: true,
-        text: [
-          "这条消息已经发到 bridge，但 Codex runtime 直到现在都没有返回首个事件。",
-          "如果 terminal 里的那轮 reconnecting 已经跑完 5 次，这条共享线程基本可以判定没有真正启动成功。",
-          `workspace: ${workspaceRoot}`,
-          `thread: ${normalizedThreadId}`,
-          "优先检查：共享 app-server 是否正常、当前终端是否接在同一个 thread、runtime 是否真的开始处理这条消息。",
-          "如果你正在帮用户排查，直接按这套顺序做：",
-          "1. 在项目目录执行 npm run shared:status",
-          "2. 如果 bridge 不在，先执行 npm run shared:start",
-          "3. 再开一个终端执行 npm run shared:open",
-          "4. 确认 terminal 里打开的是上面这条 thread，而不是另一条私有线程",
-        ].join("\n"),
-      }).catch(() => {});
-    }, FIRST_RUNTIME_EVENT_FAILURE_TIMEOUT_MS);
-    this.pendingRuntimeEventWatchdogs.set(normalizedThreadId, {
-      noticeTimer,
-      failureTimer,
-      noticeSent: false,
+    const visionContext = await resolveVisionContext({
+      prepared,
+      config: this.config,
+      runtimeAdapter: this.runtimeAdapter,
+      model,
     });
+    return {
+      text: assembleRuntimeTurnText({
+        prepared,
+        config: this.config,
+        visionContext,
+      }),
+      attachments: Array.isArray(visionContext.runtimeAttachments) ? visionContext.runtimeAttachments : [],
+      visionContext,
+    };
   }
 
-  clearRuntimeEventWatchdog(threadId) {
-    const normalizedThreadId = normalizeCommandArgument(threadId);
-    if (!normalizedThreadId) {
+  async routePreparedInbound({ bindingKey, workspaceRoot, prepared }) {
+    if (this.isTurnDispatchBlocked(bindingKey, workspaceRoot)) {
+      this.bufferPendingInboundMessage({ bindingKey, workspaceRoot, prepared });
+      return false;
+    }
+    return this.dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared });
+  }
+
+  hasPendingImageInbound(bindingKey, workspaceRoot) {
+    return this.pendingImageInboundByScope.has(buildScopeKey(bindingKey, workspaceRoot));
+  }
+
+  enqueuePendingImageInbound({ bindingKey, workspaceRoot, prepared }) {
+    const scopeKey = buildScopeKey(bindingKey, workspaceRoot);
+    if (!scopeKey || !prepared) {
       return;
     }
-    const watchdog = this.pendingRuntimeEventWatchdogs.get(normalizedThreadId);
-    if (!watchdog) {
+
+    const current = this.pendingImageInboundByScope.get(scopeKey) || {
+      bindingKey,
+      workspaceRoot,
+      messages: [],
+      timer: null,
+    };
+    current.messages.push(clonePreparedInboundMessage(prepared));
+    this.pendingImageInboundByScope.set(scopeKey, current);
+    this.schedulePendingImageInboundFlush(scopeKey, bindingKey, workspaceRoot);
+    void this.channelAdapter.sendTyping({
+      userId: prepared.senderId,
+      status: 1,
+      contextToken: prepared.contextToken,
+    }).catch(() => {});
+  }
+
+  schedulePendingImageInboundFlush(scopeKey, bindingKey, workspaceRoot, delayMs = INBOUND_IMAGE_BATCH_IDLE_MS) {
+    const draft = this.pendingImageInboundByScope.get(scopeKey);
+    if (!draft) {
       return;
     }
-    clearTimeout(watchdog.noticeTimer);
-    clearTimeout(watchdog.failureTimer);
-    this.pendingRuntimeEventWatchdogs.delete(normalizedThreadId);
+    if (draft.timer) {
+      clearTimeout(draft.timer);
+    }
+    draft.timer = setTimeout(() => {
+      void this.flushPendingImageInboundBatch({ bindingKey, workspaceRoot }).catch((error) => {
+        const message = error instanceof Error ? error.stack || error.message : String(error);
+        console.error(`[cyberboss] image inbound debounce flush failed ${message}`);
+      });
+    }, Math.max(0, Number(delayMs) || 0));
+    this.pendingImageInboundByScope.set(scopeKey, draft);
+  }
+
+  clearPendingImageInboundTimer(scopeKey) {
+    const draft = this.pendingImageInboundByScope.get(scopeKey);
+    if (!draft?.timer) {
+      return;
+    }
+    clearTimeout(draft.timer);
+    draft.timer = null;
+  }
+
+  clearPendingImageInboundTimers() {
+    for (const [scopeKey] of this.pendingImageInboundByScope.entries()) {
+      this.clearPendingImageInboundTimer(scopeKey);
+    }
+  }
+
+  async flushPendingImageInboundBatch({ bindingKey = "", workspaceRoot = "", trailingPrepared = null } = {}) {
+    const scopeKey = buildScopeKey(bindingKey, workspaceRoot);
+    const draft = scopeKey ? this.pendingImageInboundByScope.get(scopeKey) || null : null;
+    if (!draft?.bindingKey || !draft?.workspaceRoot) {
+      if (scopeKey) {
+        this.pendingImageInboundByScope.delete(scopeKey);
+      }
+      return false;
+    }
+
+    this.clearPendingImageInboundTimer(scopeKey);
+    this.pendingImageInboundByScope.delete(scopeKey);
+
+    const queued = Array.isArray(draft.messages)
+      ? draft.messages
+        .filter((message) => message && typeof message === "object")
+        .slice()
+        .sort(comparePendingInboundMessages)
+      : [];
+    if (!queued.length) {
+      return false;
+    }
+
+    const { batchMessages, remainingMessages } = takeImageOnlyBatchMessages(queued, MAX_INBOUND_STICKER_IMAGE_BATCH);
+    if (!batchMessages.length) {
+      return false;
+    }
+
+    if (remainingMessages.length) {
+      this.pendingImageInboundByScope.set(scopeKey, {
+        bindingKey: draft.bindingKey,
+        workspaceRoot: draft.workspaceRoot,
+        messages: remainingMessages,
+        timer: null,
+      });
+    }
+
+    const prepared = buildMergedInboundPrepared({
+      bindingKey: draft.bindingKey,
+      workspaceRoot: draft.workspaceRoot,
+      messages: batchMessages,
+      trailingPrepared,
+    });
+    await this.routePreparedInbound({
+      bindingKey: draft.bindingKey,
+      workspaceRoot: draft.workspaceRoot,
+      prepared,
+    });
+
+    if (remainingMessages.length) {
+      await this.flushPendingImageInboundBatch({
+        bindingKey: draft.bindingKey,
+        workspaceRoot: draft.workspaceRoot,
+      });
+    }
+
+    return true;
+  }
+
+  bufferPendingInboundMessage({ bindingKey, workspaceRoot, prepared }) {
+    const scopeKey = buildScopeKey(bindingKey, workspaceRoot);
+    if (!scopeKey || !prepared) {
+      return;
+    }
+
+    const current = this.pendingInboundByScope.get(scopeKey) || {
+      bindingKey,
+      workspaceRoot,
+      messages: [],
+    };
+    current.messages.push({
+      workspaceId: prepared.workspaceId,
+      accountId: prepared.accountId,
+      senderId: prepared.senderId,
+      messageId: prepared.messageId,
+      contextToken: prepared.contextToken,
+      provider: prepared.provider,
+      originalText: prepared.originalText,
+      text: prepared.text,
+      attachments: Array.isArray(prepared.attachments) ? prepared.attachments : [],
+      attachmentFailures: Array.isArray(prepared.attachmentFailures) ? prepared.attachmentFailures : [],
+      receivedAt: prepared.receivedAt,
+    });
+    this.pendingInboundByScope.set(scopeKey, current);
+    void this.channelAdapter.sendTyping({
+      userId: prepared.senderId,
+      status: 1,
+      contextToken: prepared.contextToken,
+    }).catch(() => {});
+  }
+
+  hasPendingInboundMessage(bindingKey, workspaceRoot) {
+    return this.pendingInboundByScope.has(buildScopeKey(bindingKey, workspaceRoot));
+  }
+
+  async flushPendingInboundMessages({ bindingKey = "", workspaceRoot = "", ignoreBoundary = false } = {}) {
+    const targetScopeKey = buildScopeKey(bindingKey, workspaceRoot);
+    const scopeEntries = targetScopeKey
+      ? [[targetScopeKey, this.pendingInboundByScope.get(targetScopeKey) || null]]
+      : [...this.pendingInboundByScope.entries()];
+
+    for (const [scopeKey, draft] of scopeEntries) {
+      if (!draft?.bindingKey || !draft?.workspaceRoot) {
+        this.pendingInboundByScope.delete(scopeKey);
+        continue;
+      }
+      if (this.isTurnDispatchBlocked(draft.bindingKey, draft.workspaceRoot, { ignoreBoundary })) {
+        continue;
+      }
+      const pendingDispatch = this.mergePendingInboundDraft(draft);
+      if (!pendingDispatch?.prepared) {
+        this.pendingInboundByScope.delete(scopeKey);
+        continue;
+      }
+      this.pendingInboundByScope.delete(scopeKey);
+      const dispatched = await this.dispatchPreparedTurn({
+        bindingKey: pendingDispatch.prepared.bindingKey,
+        workspaceRoot: pendingDispatch.prepared.workspaceRoot,
+        prepared: {
+          workspaceId: pendingDispatch.prepared.workspaceId,
+          accountId: pendingDispatch.prepared.accountId,
+          senderId: pendingDispatch.prepared.senderId,
+          contextToken: pendingDispatch.prepared.contextToken,
+          provider: pendingDispatch.prepared.provider,
+          originalText: pendingDispatch.prepared.originalText,
+          text: pendingDispatch.prepared.text,
+          attachments: pendingDispatch.prepared.attachments,
+          attachmentFailures: pendingDispatch.prepared.attachmentFailures,
+          receivedAt: pendingDispatch.prepared.receivedAt,
+        },
+      });
+      if (!dispatched) {
+        this.pendingInboundByScope.set(scopeKey, draft);
+        continue;
+      }
+      if (pendingDispatch.remainingMessages.length) {
+        this.pendingInboundByScope.set(scopeKey, {
+          bindingKey: draft.bindingKey,
+          workspaceRoot: draft.workspaceRoot,
+          messages: pendingDispatch.remainingMessages,
+        });
+      }
+    }
+  }
+
+  mergePendingInboundDraft(draft) {
+    const queued = Array.isArray(draft?.messages)
+      ? draft.messages
+        .filter((message) => message && typeof message === "object")
+        .slice()
+        .sort(comparePendingInboundMessages)
+      : [];
+    if (!queued.length) {
+      return null;
+    }
+    if (queued.every((message) => shouldBatchImageOnlyInbound(message))) {
+      const { batchMessages, remainingMessages } = takeImageOnlyBatchMessages(queued, MAX_INBOUND_STICKER_IMAGE_BATCH);
+      return {
+        prepared: buildMergedInboundPrepared({
+          bindingKey: draft.bindingKey,
+          workspaceRoot: draft.workspaceRoot,
+          messages: batchMessages,
+        }),
+        remainingMessages,
+      };
+    }
+
+    if (queued.length === 1) {
+      return {
+        prepared: {
+          bindingKey: draft.bindingKey,
+          workspaceRoot: draft.workspaceRoot,
+          ...queued[0],
+        },
+        remainingMessages: [],
+      };
+    }
+
+    const latest = queued[queued.length - 1];
+    const blocks = queued
+      .map((message) => String(message.text || "").trim())
+      .filter(Boolean);
+
+    return {
+      prepared: {
+        bindingKey: draft.bindingKey,
+        workspaceRoot: draft.workspaceRoot,
+        ...latest,
+        text: [
+          "Multiple newer WeChat messages arrived while you were still handling the previous turn.",
+          "Treat the following blocks as one ordered batch of fresh user input and respond once after considering all of them.",
+          "",
+          blocks.join("\n\n"),
+        ].join("\n").trim(),
+      },
+      remainingMessages: [],
+    };
   }
 
   async prepareIncomingMessageForRuntime(normalized, workspaceRoot) {
-    const attachments = Array.isArray(normalized.attachments) ? normalized.attachments : [];
-    if (!attachments.length) {
+    if (normalized?.provider === "system") {
       return {
         ...normalized,
         originalText: normalized.text,
-        text: buildCodexInboundText(normalized, { saved: [], failed: [] }, this.config),
+        text: String(normalized.text || "").trim(),
         attachments: [],
         attachmentFailures: [],
       };
+    }
+
+    const attachments = Array.isArray(normalized.attachments) ? normalized.attachments : [];
+    if (!attachments.length) {
+      return buildInboundDraft(normalized);
     }
 
     const persisted = await persistIncomingWeixinAttachments({
@@ -421,31 +805,28 @@ class CyberbossApp {
     if (!persisted.saved.length && persisted.failed.length && !String(normalized.text || "").trim()) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: `图片/附件接收失败：${persisted.failed.map((item) => item.reason).join("; ")}`,
+        text: `⚠️ Failed to receive image or attachment\n${persisted.failed.map((item) => item.reason).join("\n")}`,
         contextToken: normalized.contextToken,
         preserveBlock: true,
       }).catch(() => {});
       return null;
     }
 
-    const codexInboundText = buildCodexInboundText(normalized, persisted, this.config);
-    if (!codexInboundText) {
-      await this.channelAdapter.sendText({
-        userId: normalized.senderId,
-        text: `图片/附件接收失败：${persisted.failed.map((item) => item.reason).join("; ")}`,
-        contextToken: normalized.contextToken,
-        preserveBlock: true,
-      }).catch(() => {});
-      return null;
-    }
-
-    return {
-      ...normalized,
-      originalText: normalized.text,
-      text: codexInboundText,
+    const prepared = buildInboundDraft(normalized, {
       attachments: persisted.saved,
       attachmentFailures: persisted.failed,
-    };
+    });
+    if (!prepared.originalText && !prepared.attachments.length && prepared.attachmentFailures.length) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `⚠️ Failed to receive image or attachment\n${persisted.failed.map((item) => item.reason).join("\n")}`,
+        contextToken: normalized.contextToken,
+        preserveBlock: true,
+      }).catch(() => {});
+      return null;
+    }
+
+    return prepared;
   }
 
   async flushPendingSystemMessages() {
@@ -466,10 +847,23 @@ class CyberbossApp {
     const pendingJobs = this.timelineScreenshotQueue.drainForAccount(account.accountId);
     for (const job of pendingJobs) {
       try {
-        await this.sendTimelineScreenshot({
-          senderId: job.senderId,
-          args: job.args,
+        const captured = await this.projectServices.timeline.captureScreenshot({
           outputFile: job.outputFile,
+          selector: job.selector,
+          range: job.range,
+          date: job.date,
+          week: job.week,
+          month: job.month,
+          category: job.category,
+          subcategory: job.subcategory,
+          width: job.width,
+          height: job.height,
+          sidePadding: job.sidePadding,
+          locale: job.locale,
+        });
+        await this.sendLocalFileToCurrentChat({
+          senderId: job.senderId,
+          filePath: captured.outputFile,
         });
       } catch (error) {
         const messageText = error instanceof Error ? error.message : String(error || "unknown error");
@@ -480,7 +874,7 @@ class CyberbossApp {
         }).catch(() => {});
         await this.channelAdapter.sendText({
           userId: job.senderId,
-          text: `时间轴截图失败：${messageText}`,
+          text: `❌ Timeline screenshot failed\n${messageText}`,
           preserveBlock: true,
         }).catch(() => {});
       }
@@ -551,13 +945,10 @@ class CyberbossApp {
       senderId: prepared.senderId,
     });
     const workspaceRoot = prepared.workspaceRoot || this.resolveWorkspaceRoot(bindingKey);
-    const threadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot);
-    const threadState = threadId ? this.threadStateStore.getThreadState(threadId) : null;
-    if (threadState?.status === "running" || hasRpcId(threadState?.pendingApproval?.requestId)) {
+    if (this.isTurnDispatchBlocked(bindingKey, workspaceRoot)) {
       return false;
     }
-    await this.handlePreparedMessage(prepared, { allowCommands: false });
-    return true;
+    return this.dispatchPreparedTurn({ bindingKey, workspaceRoot, prepared });
   }
 
   async dispatchChannelCommand(normalized, command) {
@@ -574,11 +965,20 @@ class CyberbossApp {
       case "reread":
         await this.handleRereadCommand(normalized);
         return;
+      case "compact":
+        await this.handleCompactCommand(normalized);
+        return;
       case "switch":
         await this.handleSwitchCommand(normalized, command);
         return;
       case "stop":
         await this.handleStopCommand(normalized);
+        return;
+      case "checkin":
+        await this.handleCheckinCommand(normalized, command);
+        return;
+      case "chunk":
+        await this.handleChunkCommand(normalized, command);
         return;
       case "yes":
       case "always":
@@ -587,6 +987,9 @@ class CyberbossApp {
         return;
       case "model":
         await this.handleModelCommand(normalized, command);
+        return;
+      case "star":
+        await this.handleStarCommand(normalized);
         return;
       case "help":
         await this.handleHelpCommand(normalized);
@@ -605,7 +1008,7 @@ class CyberbossApp {
     if (!workspaceRoot) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "用法：/bind /绝对路径",
+        text: "💡 Usage: /bind /absolute/path",
         contextToken: normalized.contextToken,
       });
       return;
@@ -614,7 +1017,16 @@ class CyberbossApp {
     if (!isAbsoluteWorkspacePath(workspaceRoot)) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "只支持绝对路径绑定。",
+        text: "⚠️ Only absolute paths are supported for /bind.",
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+
+    if (!isPathWithinAllowedDirectories(workspaceRoot)) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: "⚠️ The path must be within your home directory or the current working directory.",
         contextToken: normalized.contextToken,
       });
       return;
@@ -624,7 +1036,7 @@ class CyberbossApp {
     if (!stats?.isDirectory()) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: `项目不存在：${workspaceRoot}`,
+        text: `❌ Workspace does not exist\n${workspaceRoot}`,
         contextToken: normalized.contextToken,
       });
       return;
@@ -638,7 +1050,7 @@ class CyberbossApp {
     this.runtimeAdapter.getSessionStore().setActiveWorkspaceRoot(bindingKey, workspaceRoot);
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `已绑定项目。\n\nworkspace: ${workspaceRoot}`,
+      text: `✅ Workspace bound\nworkspace: ${workspaceRoot}`,
       contextToken: normalized.contextToken,
     });
   }
@@ -650,33 +1062,33 @@ class CyberbossApp {
       senderId: normalized.senderId,
     });
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
-    const threadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const threadId = sessionStore.getThreadIdForWorkspace(bindingKey, workspaceRoot);
     const threadState = threadId ? this.threadStateStore.getThreadState(threadId) : null;
-    const usage = this.threadStateStore.getLatestUsage();
+    const runtimeName = this.runtimeAdapter.describe().id || "runtime";
+    const context = threadState?.context?.runtimeId === runtimeName
+      ? threadState.context
+      : this.threadStateStore.getLatestContext(runtimeName);
+    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
+    const storedModel = runtimeParams.model || "";
+    const storedModelProvider = runtimeParams.modelProvider || this.runtimeAdapter.describe().modelProvider || "";
+    const effectiveModel = this.runtimeAdapter.describe().model || storedModel;
+
     const lines = [
-      `workspace: ${workspaceRoot}`,
-      `thread: ${threadId || "(none)"}`,
-      `status: ${threadState?.status || "idle"}`,
-      `access: ${this.config.codexAccessMode || "workspace-write"}`,
-      `model: ${this.runtimeAdapter.getSessionStore().getCodexParamsForWorkspace(bindingKey, workspaceRoot).model || "(default)"}`,
+      `📍 workspace: ${workspaceRoot}`,
+      `🧵 thread: ${threadId || "(none)"}`,
+      `📊 status: ${threadState?.status || "idle"}`,
+      `🤖 runtime: ${runtimeName}`,
+      `🤖 model: ${effectiveModel || "(default)"}`,
+      `🤖 provider: ${storedModelProvider || "(default)"}`,
+      `🔒 access: ${this.config.codexAccessMode || "workspace-write"}`,
     ];
-    if (usage) {
-      const usageParts = [];
-      if (usage.modelContextWindow > 0 && usage.lastTotalTokens > 0) {
-        usageParts.push(`last ${formatCompactNumber(usage.lastTotalTokens)}/${formatCompactNumber(usage.modelContextWindow)}`);
-      } else if (usage.lastTotalTokens > 0) {
-        usageParts.push(`last ${formatCompactNumber(usage.lastTotalTokens)}`);
-      }
-      if (usage.primaryUsedPercent > 0) {
-        usageParts.push(`5h ${usage.primaryUsedPercent}%`);
-      }
-      if (usage.secondaryUsedPercent > 0) {
-        usageParts.push(`7d ${usage.secondaryUsedPercent}%`);
-      }
-      if (usageParts.length) {
-        lines.push(`usage: ${usageParts.join(" | ")}`);
-      }
-    }
+    lines.push(formatContextStatusLine({
+      runtimeName,
+      context,
+      claudeContextWindow: this.config.claudeContextWindow,
+      claudeMaxOutputTokens: this.config.claudeMaxOutputTokens,
+    }));
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
       text: lines.join("\n"),
@@ -691,10 +1103,13 @@ class CyberbossApp {
       senderId: normalized.senderId,
     });
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
+    if (typeof this.runtimeAdapter.startFreshThreadDraft === "function") {
+      await this.runtimeAdapter.startFreshThreadDraft({ bindingKey, workspaceRoot });
+    }
     this.runtimeAdapter.getSessionStore().clearThreadIdForWorkspace(bindingKey, workspaceRoot);
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `已切到新线程草稿。\n\nworkspace: ${workspaceRoot}`,
+      text: `✅ Switched to a fresh thread draft\nworkspace: ${workspaceRoot}`,
       contextToken: normalized.contextToken,
     });
   }
@@ -711,7 +1126,7 @@ class CyberbossApp {
     if (!threadId) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "当前还没有可用线程，先发一条普通消息开始。",
+        text: "💡 There is no active thread yet. Send a normal message first.",
         contextToken: normalized.contextToken,
       });
       return;
@@ -723,32 +1138,80 @@ class CyberbossApp {
         contextToken: normalized.contextToken,
         provider: normalized.provider,
       });
-      this.scheduleRuntimeEventWatchdog({
-        bindingKey,
-        workspaceRoot,
-        normalized,
-        threadId,
-      });
+      const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
       await this.runtimeAdapter.refreshThreadInstructions({
         threadId,
         workspaceRoot,
-        model: sessionStore.getCodexParamsForWorkspace(bindingKey, workspaceRoot).model,
+        model: runtimeParams.model,
+        modelProvider: runtimeParams.modelProvider,
       });
     } catch (error) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: `重读失败：${error instanceof Error ? error.message : String(error || "unknown error")}`,
+        text: `❌ Reread failed\n${error instanceof Error ? error.message : String(error || "unknown error")}`,
+        contextToken: normalized.contextToken,
+      }).catch(() => {});
+    }
+  }
+
+  async handleCompactCommand(normalized) {
+    const bindingKey = this.runtimeAdapter.getSessionStore().buildBindingKey({
+      workspaceId: normalized.workspaceId,
+      accountId: normalized.accountId,
+      senderId: normalized.senderId,
+    });
+    const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const threadId = sessionStore.getThreadIdForWorkspace(bindingKey, workspaceRoot);
+    if (!threadId) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: "💡 There is no active thread yet. Send a normal message first.",
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+
+    try {
+      this.streamDelivery.queueReplyTargetForThread(threadId, {
+        userId: normalized.senderId,
+        contextToken: normalized.contextToken,
+        provider: normalized.provider,
+      });
+      await this.runtimeAdapter.compactThread({
+        threadId,
+        workspaceRoot,
+        model: sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model,
+      }).then((result) => {
+        const compactTurnId = normalizeCommandArgument(result?.turnId);
+        if (compactTurnId) {
+          this.pendingOperationByRunKey.set(buildRunKey(threadId, compactTurnId), {
+            kind: "compact",
+            userId: normalized.senderId,
+            contextToken: normalized.contextToken,
+          });
+        }
+      });
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `🗜️ Compact request sent\nthread: ${threadId}`,
+        contextToken: normalized.contextToken,
+      });
+    } catch (error) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `❌ Compact failed\n${error instanceof Error ? error.message : String(error || "unknown error")}`,
         contextToken: normalized.contextToken,
       }).catch(() => {});
     }
   }
 
   async handleSwitchCommand(normalized, command) {
-    const targetThreadId = normalizeCommandArgument(command.args);
+    const targetThreadId = normalizeThreadId(command.args);
     if (!targetThreadId) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "用法：/switch <threadId>",
+        text: "💡 Usage: /switch <threadId>",
         contextToken: normalized.contextToken,
       });
       return;
@@ -760,11 +1223,22 @@ class CyberbossApp {
       senderId: normalized.senderId,
     });
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
-    await this.runtimeAdapter.resumeThread({ threadId: targetThreadId });
-    this.runtimeAdapter.getSessionStore().setThreadIdForWorkspace(bindingKey, workspaceRoot, targetThreadId);
+    const sessionStore = this.runtimeAdapter.getSessionStore();
+    const runtimeParams = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot);
+    const resumed = await this.runtimeAdapter.resumeThread({
+      threadId: targetThreadId,
+      workspaceRoot,
+      model: runtimeParams.model,
+      modelProvider: runtimeParams.modelProvider,
+    });
+    sessionStore.setThreadIdForWorkspace(
+      bindingKey,
+      workspaceRoot,
+      resumed?.threadId || targetThreadId,
+    );
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `已切换线程。\n\nworkspace: ${workspaceRoot}\nthread: ${targetThreadId}`,
+      text: `✅ Thread switched\nworkspace: ${workspaceRoot}\nthread: ${resumed?.threadId || targetThreadId}`,
       contextToken: normalized.contextToken,
     });
   }
@@ -778,10 +1252,10 @@ class CyberbossApp {
     const workspaceRoot = this.resolveWorkspaceRoot(bindingKey);
     const threadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot);
     const threadState = threadId ? this.threadStateStore.getThreadState(threadId) : null;
-    if (!threadId || !threadState?.turnId || threadState.status !== "running") {
+    if (!threadId || !threadState?.turnId || !["running", "waiting_approval"].includes(threadState.status)) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "当前没有正在运行的线程。",
+        text: "💡 There is no running thread right now.",
         contextToken: normalized.contextToken,
       });
       return;
@@ -790,10 +1264,72 @@ class CyberbossApp {
     await this.runtimeAdapter.cancelTurn({
       threadId,
       turnId: threadState.turnId,
+      workspaceRoot,
     });
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `已发送停止请求。\n\nthread: ${threadId}`,
+      text: `⏹️ Stop request sent\nthread: ${threadId}`,
+      contextToken: normalized.contextToken,
+    });
+  }
+
+  async handleCheckinCommand(normalized, command) {
+    const rangeInput = normalizeCommandArgument(command.args);
+    if (!rangeInput) {
+      const currentRange = this.checkinConfigStore.getRange(resolveDefaultCheckinRange());
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `⏰ Current check-in interval is ${Math.round(currentRange.minIntervalMs / 60000)}-${Math.round(currentRange.maxIntervalMs / 60000)} minutes.`,
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+
+    const parsedRange = parseCheckinRangeMinutes(rangeInput);
+    if (!parsedRange) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: "💡 Usage: /checkin <min>-<max>",
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+
+    this.checkinConfigStore.setRange({
+      minIntervalMs: parsedRange.minMinutes * 60_000,
+      maxIntervalMs: parsedRange.maxMinutes * 60_000,
+    });
+    await this.channelAdapter.sendText({
+      userId: normalized.senderId,
+      text: `✅ Check-in interval reset to ${parsedRange.minMinutes}-${parsedRange.maxMinutes} minutes and will apply on the next polling cycle.`,
+      contextToken: normalized.contextToken,
+    });
+  }
+
+  async handleChunkCommand(normalized, command) {
+    const arg = normalizeCommandArgument(command.args);
+    if (!arg) {
+      const current = this.channelAdapter.getMinChunkChars?.() ?? DEFAULT_MIN_WEIXIN_CHUNK;
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `💡 Current minimum merge chunk is ${current} characters. Usage: /chunk <number> (e.g. /chunk 50)`,
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+    const parsed = Number.parseInt(arg, 10);
+    if (!Number.isFinite(parsed) || parsed < 1 || parsed > MAX_MIN_WEIXIN_CHUNK) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: `⚠️  Invalid value. Please provide a number between 1 and ${MAX_MIN_WEIXIN_CHUNK}.`,
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
+    const updated = this.channelAdapter.setMinChunkChars?.(parsed) ?? parsed;
+    await this.channelAdapter.sendText({
+      userId: normalized.senderId,
+      text: `✅ Minimum merge chunk set to ${updated} characters. Shorter fragments will be merged into one message up to this size.`,
       contextToken: normalized.contextToken,
     });
   }
@@ -808,34 +1344,46 @@ class CyberbossApp {
     const threadId = this.runtimeAdapter.getSessionStore().getThreadIdForWorkspace(bindingKey, workspaceRoot);
     const threadState = threadId ? this.threadStateStore.getThreadState(threadId) : null;
     const approval = threadState?.pendingApproval || null;
-    if (!threadId || approval?.requestId == null || String(approval.requestId).trim() === "") {
+  if (!threadId || approval?.requestId == null || String(approval.requestId).trim() === "") {
+    await this.channelAdapter.sendText({
+      userId: normalized.senderId,
+      text: "💡 There is no pending approval request right now.",
+      contextToken: normalized.contextToken,
+      });
+      return;
+    }
+
+    if (approval?.kind === "mcp_tool_call" && command.name === "always") {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: "当前没有待处理的授权请求。",
+        text: "⚠️ Persistent approval for this Codex MCP tool request is not available from WeChat.",
         contextToken: normalized.contextToken,
       });
       return;
     }
 
-    const decision = command.name === "no" ? "decline" : "accept";
+    const approvalResponse = buildApprovalResponsePayload(approval, command.name);
+    if (!approvalResponse) {
+      await this.channelAdapter.sendText({
+        userId: normalized.senderId,
+        text: "⚠️ This Codex MCP request cannot be answered from WeChat yet.",
+        contextToken: normalized.contextToken,
+      });
+      return;
+    }
     console.log(
-      `[cyberboss] approval response requested thread=${threadId} requestId=${approval.requestId} decision=${decision} workspace=${workspaceRoot}`
+      `[cyberboss] approval response requested thread=${threadId} requestId=${approval.requestId} mode=${approvalResponse.result ? "result" : "decision"} workspace=${workspaceRoot}`
     );
-    await this.runtimeAdapter.respondApproval({
-      requestId: approval.requestId,
-      decision,
-    });
+    await this.runtimeAdapter.respondApproval(approvalResponse);
     this.runtimeAdapter.getSessionStore().clearApprovalPrompt(threadId);
     console.log(
-      `[cyberboss] approval response delivered thread=${threadId} requestId=${approval.requestId} decision=${decision}`
+      `[cyberboss] approval response delivered thread=${threadId} requestId=${approval.requestId}`
     );
-    if (command.name === "always" && decision === "accept") {
+    if (command.name === "always" && approvalResponse.decision === "accept") {
       this.runtimeAdapter.getSessionStore().rememberApprovalPrefixForWorkspace(workspaceRoot, approval.commandTokens);
     }
     this.threadStateStore.resolveApproval(threadId, "running");
-    const text = command.name === "always"
-      ? "已记住该命令前缀，当前项目后续相同命令将自动放行。"
-      : (command.name === "yes" ? "已允许本次请求。" : "已拒绝本次请求。");
+    const text = buildApprovalResponseText(approval, command.name, approvalResponse);
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
       text,
@@ -853,16 +1401,16 @@ class CyberbossApp {
     const query = normalizeCommandArgument(command.args);
     const sessionStore = this.runtimeAdapter.getSessionStore();
     const catalog = sessionStore.getAvailableModelCatalog();
-    const currentModel = sessionStore.getCodexParamsForWorkspace(bindingKey, workspaceRoot).model;
+    const currentModel = sessionStore.getRuntimeParamsForWorkspace(bindingKey, workspaceRoot).model;
 
     if (!query) {
       const lines = [
-        `当前模型: ${currentModel || "(default)"}`,
+        `Current model: ${currentModel || "(default)"}`,
       ];
       if (catalog?.models?.length) {
-        lines.push(`可用模型: ${catalog.models.map((item) => item.model).join("、")}`);
+        lines.push(`Available models: ${catalog.models.map((item) => item.model).join(", ")}`);
       } else {
-        lines.push("可用模型: (未获取到模型列表)");
+        lines.push("Available models: (not available)");
       }
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
@@ -872,24 +1420,46 @@ class CyberbossApp {
       return;
     }
 
-    const matched = findModelByQuery(catalog?.models || [], query);
+    const runtimeId = this.runtimeAdapter.describe().id || "runtime";
+    let matched = findModelByQuery(catalog?.models || [], query);
+    if (!matched && runtimeId !== "codex" && !catalog?.models?.length) {
+      matched = { model: query };
+    }
     if (!matched) {
       await this.channelAdapter.sendText({
         userId: normalized.senderId,
-        text: `未找到模型：${query}`,
+        text: `❌ Model not found\n${query}`,
         contextToken: normalized.contextToken,
       });
       return;
     }
 
-    sessionStore.setCodexParamsForWorkspace(bindingKey, workspaceRoot, {
+    sessionStore.setRuntimeParamsForWorkspace(bindingKey, workspaceRoot, {
       model: matched.model,
     });
     await this.channelAdapter.sendText({
       userId: normalized.senderId,
-      text: `已切换模型。\n\nworkspace: ${workspaceRoot}\nmodel: ${matched.model}`,
+      text: `✅ Model switched\nworkspace: ${workspaceRoot}\nmodel: ${matched.model}`,
       contextToken: normalized.contextToken,
     });
+  }
+
+  async handleStarCommand(normalized) {
+    await this.channelAdapter.sendText({
+      userId: normalized.senderId,
+      text: [
+        "⭐️ Liked this project? Throw me a star on GitHub!",
+        "It really means a lot to an indie dev working on passion projects 💖",
+        "",
+        "https://github.com/WenXiaoWendy/cyberboss",
+      ].join("\n"),
+      contextToken: normalized.contextToken,
+    });
+    await this.channelAdapter.sendFile({
+      userId: normalized.senderId,
+      filePath: path.join(__dirname, "../../assets/star-guide.jpg"),
+      contextToken: normalized.contextToken,
+    }).catch(() => {});
   }
 
   async handleHelpCommand(normalized) {
@@ -906,15 +1476,71 @@ class CyberbossApp {
   }
 
   async handleRuntimeEvent(event) {
+    const failureReplyTarget = event?.type === "runtime.turn.failed"
+      ? this.streamDelivery.resolveReplyTargetForRun({
+          threadId: event?.payload?.threadId,
+          turnId: event?.payload?.turnId,
+        })
+      : null;
     await this.streamDelivery.handleRuntimeEvent(event);
     if (!event) {
       return;
     }
     if (event.type === "runtime.turn.completed" || event.type === "runtime.turn.failed") {
-      this.runtimeAdapter.getSessionStore().clearApprovalPrompt(event.payload.threadId);
-      await this.stopTypingForThread(event.payload.threadId);
-      if (event.type === "runtime.turn.failed") {
-        await this.sendFailureToThread(event.payload.threadId, event.payload.text || "执行失败");
+      const completedRunKey = buildRunKey(event.payload.threadId, event.payload.turnId);
+      const pendingOperations = this.pendingOperationByRunKey;
+      const pendingOperation = pendingOperations?.get?.(completedRunKey) || null;
+      if (pendingOperation && pendingOperations?.delete) {
+        pendingOperations.delete(completedRunKey);
+      }
+      const sessionStore = this.runtimeAdapter.getSessionStore();
+      sessionStore.clearApprovalPrompt(event.payload.threadId);
+      const linked = this.runtimeAdapter.getSessionStore().findBindingForThreadId(event.payload.threadId);
+      const scopeKey = linked?.bindingKey && linked?.workspaceRoot
+        ? buildScopeKey(linked.bindingKey, linked.workspaceRoot)
+        : "";
+      if (scopeKey) {
+        this.turnBoundaryScopeKeys.add(scopeKey);
+      }
+      try {
+        this.turnGateStore.releaseThread(event.payload.threadId);
+        if (event.type === "runtime.turn.failed") {
+          await this.sendFailureToThread(
+            event.payload.threadId,
+            event.payload.text || "❌ Execution failed",
+            failureReplyTarget,
+          );
+        }
+        if (linked?.bindingKey && linked?.workspaceRoot) {
+          await this.flushPendingInboundMessages({
+            bindingKey: linked.bindingKey,
+            workspaceRoot: linked.workspaceRoot,
+            ignoreBoundary: true,
+          });
+        } else {
+          await this.flushPendingInboundMessages();
+        }
+        await this.flushPendingSystemMessages();
+        if (pendingOperation?.kind === "compact" && event.type === "runtime.turn.completed") {
+          await this.channelAdapter.sendText({
+            userId: pendingOperation.userId,
+            text: `✅ Compact finished\nthread: ${event.payload.threadId}`,
+            contextToken: pendingOperation.contextToken,
+          }).catch(() => {});
+        }
+        const shouldKeepTyping = linked?.bindingKey && linked?.workspaceRoot
+          ? (
+            this.turnGateStore.isPending(linked.bindingKey, linked.workspaceRoot)
+            || this.hasPendingInboundMessage(linked.bindingKey, linked.workspaceRoot)
+          )
+          : false;
+        if (!shouldKeepTyping) {
+          await this.stopTypingForThread(event.payload.threadId);
+        }
+      } finally {
+        if (scopeKey) {
+          this.turnBoundaryScopeKeys.delete(scopeKey);
+        }
       }
       return;
     }
@@ -927,7 +1553,8 @@ class CyberbossApp {
       return;
     }
     const allowlist = sessionStore.getApprovalCommandAllowlistForWorkspace(linked.workspaceRoot);
-    const shouldAutoApprove = matchesBuiltInCommandPrefix(event.payload.commandTokens)
+    const shouldAutoApprove = isAutoApprovedStateDirOperation(event.payload, this.config)
+      || matchesBuiltInCommandPrefix(event.payload.commandTokens)
       || matchesCommandPrefix(event.payload.commandTokens, allowlist);
     if (!shouldAutoApprove) {
       const promptState = sessionStore.getApprovalPromptState(event.payload.threadId);
@@ -949,10 +1576,16 @@ class CyberbossApp {
       });
       return;
     }
-    await this.runtimeAdapter.respondApproval({
-      requestId: event.payload.requestId,
-      decision: "accept",
-    }).catch(() => {});
+    const approvalResponse = buildApprovalResponsePayload(event.payload, "yes");
+    if (!approvalResponse) {
+      sessionStore.clearApprovalPrompt(event.payload.threadId);
+      await this.sendApprovalPrompt({
+        bindingKey: linked.bindingKey,
+        approval: event.payload,
+      }).catch(() => {});
+      return;
+    }
+    await this.runtimeAdapter.respondApproval(approvalResponse).catch(() => {});
     this.threadStateStore.resolveApproval(event.payload.threadId, "running");
   }
 
@@ -969,15 +1602,17 @@ class CyberbossApp {
     }).catch(() => {});
   }
 
-  async sendFailureToThread(threadId, text) {
+  async sendFailureToThread(threadId, text, fallbackTarget = null) {
     const linked = this.runtimeAdapter.getSessionStore().findBindingForThreadId(threadId);
-    const target = linked?.bindingKey ? this.resolveReplyTargetForBinding(linked.bindingKey) : null;
+    const target = normalizeReplyTarget(
+      linked?.bindingKey ? this.resolveReplyTargetForBinding(linked.bindingKey) : null
+    ) || normalizeReplyTarget(fallbackTarget);
     if (!target) {
       return;
     }
     await this.channelAdapter.sendText({
       userId: target.userId,
-      text: normalizeText(text) || "执行失败",
+      text: normalizeText(text) || "❌ Execution failed",
       contextToken: target.contextToken,
     }).catch(() => {});
   }
@@ -1025,16 +1660,19 @@ class CyberbossApp {
         this.streamDelivery.setReplyTarget(bindingKey, target);
       }
 
-      const threadIdByWorkspaceRoot = binding?.threadIdByWorkspaceRoot && typeof binding.threadIdByWorkspaceRoot === "object"
-        ? binding.threadIdByWorkspaceRoot
-        : {};
-      for (const threadId of Object.values(threadIdByWorkspaceRoot)) {
-        const normalizedThreadId = normalizeCommandArgument(threadId);
+      for (const workspaceRoot of sessionStore.listWorkspaceRoots(bindingKey)) {
+        const normalizedWorkspaceRoot = normalizeCommandArgument(workspaceRoot);
+        const normalizedThreadId = normalizeCommandArgument(
+          sessionStore.getThreadIdForWorkspace(bindingKey, normalizedWorkspaceRoot)
+        );
         if (!normalizedThreadId || seenThreadIds.has(normalizedThreadId)) {
           continue;
         }
         seenThreadIds.add(normalizedThreadId);
-        await this.runtimeAdapter.resumeThread({ threadId: normalizedThreadId }).catch(() => {});
+        await this.runtimeAdapter.resumeThread({
+          threadId: normalizedThreadId,
+          workspaceRoot: normalizedWorkspaceRoot,
+        }).catch(() => {});
       }
     }
   }
@@ -1057,6 +1695,21 @@ class CyberbossApp {
   }
 }
 
+function buildRunKey(threadId, turnId) {
+  return `${normalizeCommandArgument(threadId)}:${normalizeCommandArgument(turnId)}`;
+}
+
+function normalizeReplyTarget(target) {
+  if (!target?.userId || !target?.contextToken) {
+    return null;
+  }
+  return {
+    userId: String(target.userId).trim(),
+    contextToken: String(target.contextToken).trim(),
+    provider: normalizeText(target.provider),
+  };
+}
+
 function formatCompactNumber(value) {
   const normalized = Number(value);
   if (!Number.isFinite(normalized) || normalized <= 0) {
@@ -1071,6 +1724,78 @@ function formatCompactNumber(value) {
   return String(Math.round(normalized));
 }
 
+function formatContextStatusLine({ runtimeName, context, claudeContextWindow, claudeMaxOutputTokens }) {
+  if (runtimeName === "claudecode") {
+    const configuredWindow = Number(claudeContextWindow);
+    if (!Number.isFinite(configuredWindow) || configuredWindow <= 0) {
+      return "📦 context: set CYBERBOSS_CLAUDE_CONTEXT_WINDOW";
+    }
+    const reservedOutputTokens = Math.max(0, Number(claudeMaxOutputTokens) || 0);
+    const availableMessageWindow = configuredWindow - reservedOutputTokens;
+    if (availableMessageWindow <= 0) {
+      return "📦 context: reduce CLAUDE_CODE_MAX_OUTPUT_TOKENS";
+    }
+    if (!context || !Number.isFinite(Number(context.currentTokens))) {
+      return "📦 context: unavailable";
+    }
+    const summary = formatContextUsage(Number(context.currentTokens), availableMessageWindow);
+    if (reservedOutputTokens > 0) {
+      return `📦 context: approx ${summary} | reserve ${formatCompactNumber(reservedOutputTokens)}`;
+    }
+    return `📦 context: approx ${summary}`;
+  }
+  if (!context) {
+    return "📦 context: unavailable";
+  }
+  const currentTokens = Number(context.currentTokens);
+  const contextWindow = Number(context.contextWindow);
+  if (!Number.isFinite(currentTokens) || !Number.isFinite(contextWindow) || contextWindow <= 0) {
+    return "📦 context: unavailable";
+  }
+  return `📦 context: ${formatContextUsage(currentTokens, contextWindow)}`;
+}
+
+function formatContextUsage(currentTokens, contextWindow) {
+  const safeCurrent = Math.max(0, Number(currentTokens) || 0);
+  const safeWindow = Math.max(1, Number(contextWindow) || 1);
+  const clampedCurrent = Math.min(safeCurrent, safeWindow);
+  const leftPercent = Math.max(0, Math.min(100, Math.round(((safeWindow - clampedCurrent) / safeWindow) * 100)));
+  return `${formatCompactNumber(clampedCurrent)}/${formatCompactNumber(safeWindow)} | ${leftPercent}% left`;
+}
+
+function buildLocationMovementSystemText(event) {
+  const distanceText = `${formatCompactNumber(event?.distanceMeters || 0)}m`;
+  const fromLabel = normalizeText(event?.fromAddress) || formatLatLng(event?.fromCenterLat, event?.fromCenterLng);
+  const toLabel = normalizeText(event?.toAddress) || formatLatLng(event?.toCenterLat, event?.toCenterLng);
+  const movedAt = normalizeText(event?.movedAt) || new Date().toISOString();
+  return [
+    "System context: the user's location appears to have changed significantly.",
+    `Distance: about ${distanceText}.`,
+    fromLabel ? `From: ${fromLabel}` : "",
+    toLabel ? `To: ${toLabel}` : "",
+    `Observed at: ${movedAt}.`,
+  ].filter(Boolean).join("\n");
+}
+
+function buildLocationTriggerSystemText(trigger) {
+  switch (normalizeText(trigger)) {
+    case "arrive_home":
+      return "User arrives home.";
+    case "leave_home":
+      return "User leaves home.";
+    default:
+      return "";
+  }
+}
+
+function formatLatLng(latitude, longitude) {
+  const lat = Number(latitude);
+  const lng = Number(longitude);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return "";
+  }
+  return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+}
 function createShutdownController(onStop) {
   let stopped = false;
   let stoppingPromise = null;
@@ -1123,7 +1848,7 @@ function isSessionExpiredError(error) {
   return ret === SESSION_EXPIRED_ERRCODE
     || errcode === SESSION_EXPIRED_ERRCODE
     || String(error?.message || "").includes("session expired")
-    || String(error?.message || "").includes("会话已失效");
+    || String(error?.message || "").includes("session invalidated");
 }
 
 function normalizeErrorCode(value) {
@@ -1136,7 +1861,7 @@ function normalizeErrorCode(value) {
 
 function formatErrorMessage(error) {
   if (isSessionExpiredError(error)) {
-    return "微信会话已失效，请重新执行 `npm run login`";
+    return "The WeChat session has expired. Run `npm run login` again.";
   }
   if (!(error instanceof Error)) {
     return String(error || "unknown error");
@@ -1237,27 +1962,45 @@ function extractPathFromFileUri(value) {
   }
 }
 
+function isPathWithinAllowedDirectories(rawPath) {
+  const resolved = path.resolve(rawPath);
+  const normalized = resolved.replace(/\\/g, "/") + "/";
+  const allowedDirs = [
+    os.homedir(),
+    process.cwd(),
+    this?.config?.workspaceRoot,
+  ]
+    .filter(Boolean)
+    .map((dir) => path.resolve(dir).replace(/\\/g, "/") + "/");
+  return allowedDirs.some((prefix) => normalized.startsWith(prefix));
+}
+
 function normalizeCommandArgument(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeThreadId(value) {
+  const normalized = normalizeCommandArgument(value);
+  if (!normalized) {
+    return "";
+  }
+  return normalized.replace(/\s+/g, "");
 }
 
 function normalizeText(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
-function matchesCommandPrefix(commandTokens, allowlist) {
-  const normalizedCommandTokens = Array.isArray(commandTokens)
-    ? commandTokens.map((part) => normalizeCommandArgument(part)).filter(Boolean)
-    : [];
-  if (!normalizedCommandTokens.length || !Array.isArray(allowlist) || !allowlist.length) {
-    return false;
+function normalizeIsoTime(value) {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return "";
   }
-  return allowlist.some((prefix) => {
-    if (!Array.isArray(prefix) || !prefix.length || prefix.length > normalizedCommandTokens.length) {
-      return false;
-    }
-    return prefix.every((part, index) => normalizeCommandArgument(part) === normalizedCommandTokens[index]);
-  });
+  const parsed = Date.parse(normalized);
+  if (!Number.isFinite(parsed)) {
+    return "";
+  }
+  return new Date(parsed).toISOString();
 }
 
 function matchesBuiltInCommandPrefix(commandTokens) {
@@ -1266,147 +2009,69 @@ function matchesBuiltInCommandPrefix(commandTokens) {
     return false;
   }
 
-  if (normalized[0] === "npm") {
-    const runIndex = normalized.indexOf("run");
-    if (runIndex >= 0) {
-      const scriptName = normalizeCommandArgument(normalized[runIndex + 1]);
-      return isBuiltInScriptName(scriptName);
-    }
-  }
-
-  const executable = path.basename(normalized[0] || "");
-  if ((executable === "sh" || executable === "bash" || executable === "zsh")
-    && matchesBuiltInShellScript(normalized[1])) {
+  if (normalized[0] === "view_image") {
     return true;
   }
-  if (executable === "node" || executable === "node.exe") {
-    const binPath = normalizeCommandArgument(normalized[1]);
-    if (binPath === "./bin/cyberboss.js" || binPath.endsWith("/bin/cyberboss.js")) {
-      return matchesBuiltInCliCommand(normalized.slice(2));
-    }
-  }
 
-  if (executable === "cyberboss" || executable === "cyberboss.js") {
-    return matchesBuiltInCliCommand(normalized.slice(1));
+   if (normalized[0] === "mcp_tool" && normalized[1] === "cyberboss_tools") {
+    return true;
   }
 
   return false;
 }
 
 function normalizeCommandTokensForMatching(commandTokens) {
-  const normalized = Array.isArray(commandTokens)
-    ? commandTokens.map((part) => normalizeCommandArgument(part)).filter(Boolean)
-    : [];
-  if (normalized.length >= 3 && isShellWrapper(normalized[0], normalized[1])) {
-    return splitCommandLine(normalized.slice(2).join(" "));
-  }
-  return normalized;
-}
-
-function isShellWrapper(command, flag) {
-  const executable = path.basename(normalizeCommandArgument(command));
-  return (executable === "sh" || executable === "bash" || executable === "zsh") && flag === "-lc";
-}
-
-function isBuiltInScriptName(scriptName) {
-  return scriptName === "reminder:write"
-    || scriptName === "diary:write"
-    || scriptName.startsWith("timeline:");
-}
-
-function matchesBuiltInShellScript(scriptPath) {
-  const basename = path.basename(normalizeCommandArgument(scriptPath));
-  return basename === "timeline-screenshot.sh";
-}
-
-function matchesBuiltInCliCommand(tokens) {
-  if (!Array.isArray(tokens) || tokens.length < 2) {
-    return false;
-  }
-  const topic = normalizeCommandArgument(tokens[0]);
-  const action = normalizeCommandArgument(tokens[1]);
-  if (topic === "timeline") {
-    return action === "write"
-      || action === "build"
-      || action === "serve"
-      || action === "dev"
-      || action === "screenshot"
-      || action === "read"
-      || action === "categories"
-      || action === "proposals";
-  }
-  return (topic === "reminder" && action === "write")
-    || (topic === "diary" && action === "write")
-    || false;
-}
-
-function splitCommandLine(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let escaped = false;
-
-  for (const char of String(input || "")) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-
-  if (current) {
-    tokens.push(current);
-  }
-  return tokens;
+  return canonicalizeCommandTokens(commandTokens);
 }
 
 function buildApprovalPromptText(approval) {
+  if (approval?.kind === "mcp_elicitation") {
+    return buildElicitationApprovalPromptText(approval);
+  }
   const reasonText = normalizeText(approval?.reason);
   const commandText = normalizeText(approval?.command);
-  const sections = ["Codex 请求授权"];
+  const toolName = extractToolNameFromReason(reasonText) || "";
+  const commandLines = commandText ? commandText.split("\n") : [];
+  const firstCommandLine = normalizeText(commandLines[0]);
+  const restCommandLines = commandLines.slice(1);
+  const shouldShowReason = reasonText && normalizeText(reasonText) !== normalizeText(`Tool: ${firstCommandLine}`);
 
-  if (reasonText && reasonText !== commandText) {
-    sections.push(`操作说明：\n${reasonText}`);
+  const out = [];
+  out.push(`🔐 【Approval】${toolName || "Tool request"}`);
+
+  if (shouldShowReason) {
+    out.push(`📋 ${reasonText}`);
   }
 
   if (commandText) {
-    sections.push(`待执行命令：\n${commandText}`);
-  } else if (!reasonText) {
-    sections.push("(unknown)");
+    if (firstCommandLine) {
+      out.push(`⌨️ ${firstCommandLine}`);
+    }
+    if (restCommandLines.length) {
+      out.push(restCommandLines.map((line) => `  ${line}`).join("\n"));
+    }
   }
 
-  sections.push([
-    "回复以下命令继续：",
-    "/yes  本次允许",
-    "/always  本项目后续同前缀自动允许",
-    "/no  拒绝本次请求",
-  ].join("\n"));
+  if (!reasonText && !commandText) {
+    out.push("❓ (unknown)");
+  }
 
-  return sections.join("\n\n");
+  out.push("━━━━━━━━━━━━━");
+  out.push("💬 Reply with:");
+  out.push("👉 /yes    allow once");
+  out.push("👉 /always auto-allow");
+  out.push("👉 /no     deny");
+
+  return out.join("\n");
+}
+
+function extractToolNameFromReason(reason) {
+  const normalized = normalizeText(reason);
+  if (!normalized) return "";
+  if (normalized.toLowerCase().startsWith("tool:")) {
+    return normalized.slice(5).trim();
+  }
+  return normalized;
 }
 
 function buildApprovalPromptSignature(approval) {
@@ -1416,66 +2081,229 @@ function buildApprovalPromptSignature(approval) {
     ? approval.commandTokens.map((token) => normalizeCommandArgument(token)).filter(Boolean)
     : [];
   return JSON.stringify({
+    kind: normalizeText(approval?.kind),
     reason: reasonText,
     command: commandText,
     commandTokens,
+    responseTemplate: approval?.responseTemplate || null,
   });
+}
+
+function buildApprovalResponsePayload(approval, commandName) {
+  const requestId = approval?.requestId;
+  if (requestId == null || String(requestId).trim() === "") {
+    return null;
+  }
+  if (approval?.kind === "mcp_tool_call" || approval?.kind === "mcp_elicitation") {
+    const responseByCommand = approval?.responseTemplate?.responseByCommand;
+    const result = responseByCommand && typeof responseByCommand === "object"
+      ? responseByCommand[commandName]
+      : null;
+    if (!result || typeof result !== "object") {
+      return null;
+    }
+    return { requestId, result };
+  }
+  const decision = commandName === "no" ? "decline" : "accept";
+  return { requestId, decision };
+}
+
+function buildApprovalResponseText(approval, commandName, approvalResponse) {
+  if (approval?.kind === "mcp_tool_call" || approval?.kind === "mcp_elicitation") {
+    if (commandName === "yes") {
+      return "✅ This request has been approved.";
+    }
+    return "❌ This request has been cancelled.";
+  }
+  return commandName === "always"
+    ? "💡 Auto-approve enabled for this command prefix in the current workspace."
+    : (commandName === "yes" ? "✅ This request has been approved." : "❌ This request has been denied.");
+}
+
+function buildElicitationApprovalPromptText(approval) {
+  const elicitation = approval?.elicitation || {};
+  const messageText = normalizeText(elicitation?.message);
+  const commandText = normalizeText(approval?.command);
+  const approvalKind = normalizeText(elicitation?.approvalKind);
+  const out = [];
+  out.push(`🔐 【Approval】${normalizeText(approval?.reason) || "MCP request"}`);
+  if (messageText) {
+    out.push(`📋 ${messageText.split("\n")[0]}`);
+  }
+  if (commandText) {
+    const commandLines = commandText.split("\n").map((line) => normalizeText(line)).filter(Boolean);
+    if (commandLines.length) {
+      out.push(`⌨️ ${commandLines[0]}`);
+      if (commandLines.length > 1) {
+        out.push(commandLines.slice(1).map((line) => `  ${line}`).join("\n"));
+      }
+    }
+  }
+
+  const toolDescription = normalizeText(elicitation?.toolDescription);
+  if (toolDescription && approvalKind === "mcp_tool_call") {
+    out.push("━━━━━━━━━━━━━");
+    out.push(`🧾 ${toolDescription}`);
+  }
+
+  const supportedCommands = new Set(
+    Array.isArray(approval?.responseTemplate?.supportedCommands)
+      ? approval.responseTemplate.supportedCommands
+      : []
+  );
+  out.push("━━━━━━━━━━━━━");
+  out.push("💬 Reply with:");
+  if (supportedCommands.has("yes")) {
+    out.push("👉 /yes    allow once");
+  }
+  if (supportedCommands.has("no")) {
+    out.push("👉 /no     cancel this request");
+  }
+  if (!supportedCommands.size) {
+    out.push("⚠️ This Codex MCP request cannot be answered from WeChat yet.");
+  }
+
+  return out.join("\n");
 }
 
 function buildReminderSystemTrigger(reminder, config = {}) {
   const reminderText = String(reminder?.text || "").trim();
-  const userName = String(config?.userName || "").trim() || "用户";
-  return [
-    "A scheduled reminder is due.",
-    `Send ${userName} one short and natural WeChat message.`,
-    "Do not mention internal triggers.",
-    "Do not mechanically repeat the reminder text.",
-    `Reminder: ${reminderText}`,
-  ].join("\n");
+  const userName = String(config?.userName || "").trim() || "the user";
+  return `Due reminder for ${userName}: ${reminderText}`;
 }
 
-function buildCodexInboundText(normalized, persisted = {}, config = {}) {
-  const text = String(normalized?.text || "").trim();
-  const saved = Array.isArray(persisted?.saved) ? persisted.saved : [];
-  const failed = Array.isArray(persisted?.failed) ? persisted.failed : [];
-  const userName = String(config?.userName || "").trim() || "用户";
-  const localTime = formatWechatLocalTime(normalized?.receivedAt);
-  const lines = [];
-  if (localTime) {
-    lines.push(`[${localTime}]`);
+function buildScopeKey(bindingKey, workspaceRoot) {
+  const normalizedBindingKey = normalizeText(bindingKey);
+  const normalizedWorkspaceRoot = normalizeText(workspaceRoot);
+  if (!normalizedBindingKey || !normalizedWorkspaceRoot) {
+    return "";
   }
-  if (text) {
-    if (lines.length) {
-      lines.push("");
-    }
-    lines.push(text);
+  return `${normalizedBindingKey}::${normalizedWorkspaceRoot}`;
+}
+
+function isAutoApprovedStateDirOperation(approval, config = {}) {
+  const stateDir = normalizeText(config?.stateDir);
+  if (!stateDir) {
+    return false;
   }
 
-  if (saved.length) {
-    if (lines.length) {
-      lines.push("");
-    }
-    lines.push(`${userName} sent image/file attachments. They were saved under the local data directory:`);
-    for (const item of saved) {
-      const suffix = item.sourceFileName ? ` (original name: ${item.sourceFileName})` : "";
-      lines.push(`- [${item.kind}] ${item.absolutePath}${suffix}`);
-    }
-    lines.push(`You must read these files before replying to ${userName}. Do not skip the read step.`);
-    lines.push(`If the required local tool is missing, tell ${userName} exactly what is missing and that you cannot read the file yet. Do not pretend you already read it.`);
+  const filePaths = extractApprovalFilePaths(approval);
+  if (!filePaths.length) {
+    return false;
   }
 
-  if (failed.length) {
-    if (lines.length) {
-      lines.push("");
-    }
-    lines.push("Attachment intake errors:");
-    for (const item of failed) {
-      const label = item.sourceFileName || item.kind || "attachment";
-      lines.push(`- ${label}: ${item.reason}`);
-    }
+  return filePaths.every((filePath) => isPathWithinRoot(filePath, stateDir));
+}
+
+function sortInboundUpdateMessages(messages) {
+  return Array.isArray(messages)
+    ? messages.slice().sort(compareRawInboundUpdateMessages)
+    : [];
+}
+
+function compareRawInboundUpdateMessages(left, right) {
+  const leftTime = resolveRawInboundMessageTimeMs(left);
+  const rightTime = resolveRawInboundMessageTimeMs(right);
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
   }
 
-  return lines.join("\n").trim();
+  const leftMessageId = parseMessageIdForOrdering(left?.message_id);
+  const rightMessageId = parseMessageIdForOrdering(right?.message_id);
+  if (leftMessageId !== rightMessageId) {
+    return leftMessageId - rightMessageId;
+  }
+
+  const leftSeq = parseNumericOrderValue(left?.seq);
+  const rightSeq = parseNumericOrderValue(right?.seq);
+  if (leftSeq !== rightSeq) {
+    return leftSeq - rightSeq;
+  }
+
+  return String(left?.client_id || "").localeCompare(String(right?.client_id || ""));
+}
+
+function resolveRawInboundMessageTimeMs(message) {
+  const createdAtMs = parseNumericOrderValue(message?.create_time_ms);
+  if (createdAtMs > 0) {
+    return createdAtMs;
+  }
+  const createdAtSeconds = parseNumericOrderValue(message?.create_time);
+  return createdAtSeconds > 0 ? createdAtSeconds * 1000 : 0;
+}
+
+function comparePendingInboundMessages(left, right) {
+  const leftTime = Date.parse(String(left?.receivedAt || "")) || 0;
+  const rightTime = Date.parse(String(right?.receivedAt || "")) || 0;
+  if (leftTime !== rightTime) {
+    return leftTime - rightTime;
+  }
+
+  const leftMessageId = parseMessageIdForOrdering(left?.messageId);
+  const rightMessageId = parseMessageIdForOrdering(right?.messageId);
+  if (leftMessageId !== rightMessageId) {
+    return leftMessageId - rightMessageId;
+  }
+
+  return String(left?.text || "").localeCompare(String(right?.text || ""));
+}
+
+function parseMessageIdForOrdering(value) {
+  const numeric = parseNumericOrderValue(value);
+  return numeric > 0 ? numeric : Number.MAX_SAFE_INTEGER;
+}
+
+function parseNumericOrderValue(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+const DEFERRED_REPLY_NOTICE = "由于微信 context_token 的限制，上轮对话里有一部分内容当时没能送达；这次用户再次发来消息、context_token 刷新后，先把遗留内容补上。如果这种情况反复出现，可发送 /chunk <数字>（例如 /chunk 50）调大最小合并字符数，减少消息分片。";
+const DEFERRED_PLAIN_REPLY_HEADER = "===== 上轮对话遗留内容 =====";
+const DEFERRED_SYSTEM_REPLY_HEADER = "===== 期间模型主动联系 =====";
+
+function formatDeferredSystemReplyText(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return DEFERRED_REPLY_NOTICE;
+  }
+  if (normalized.startsWith(DEFERRED_REPLY_NOTICE)) {
+    return normalized;
+  }
+  return `${DEFERRED_REPLY_NOTICE}\n\n${normalized}`;
+}
+
+function formatDeferredSystemReplyBatch(replies) {
+  const grouped = groupDeferredReplies(replies);
+  if (!grouped.plain.length && !grouped.system.length) {
+    return DEFERRED_REPLY_NOTICE;
+  }
+  const parts = [
+    DEFERRED_REPLY_NOTICE,
+  ];
+  if (grouped.plain.length) {
+    parts.push("", DEFERRED_PLAIN_REPLY_HEADER, grouped.plain.join("\n\n"));
+  }
+  if (grouped.system.length) {
+    parts.push("", DEFERRED_SYSTEM_REPLY_HEADER, grouped.system.join("\n\n"));
+  }
+  return parts.join("\n");
+}
+
+function groupDeferredReplies(replies) {
+  const grouped = { plain: [], system: [] };
+  for (const reply of Array.isArray(replies) ? replies : []) {
+    const normalizedText = String(reply?.text || "").trim();
+    if (!normalizedText) {
+      continue;
+    }
+    if (reply?.kind === "system_reply") {
+      grouped.system.push(normalizedText);
+      continue;
+    }
+    grouped.plain.push(normalizedText);
+  }
+  return grouped;
 }
 
 function formatWechatLocalTime(receivedAt) {
@@ -1507,15 +2335,4 @@ function stringifyRpcId(value) {
 
 function hasRpcId(value) {
   return stringifyRpcId(value) !== "";
-}
-
-function resolveTimelineScreenshotOutput(args) {
-  const normalizedArgs = Array.isArray(args) ? args : [];
-  for (let index = 0; index < normalizedArgs.length; index += 1) {
-    if (String(normalizedArgs[index] || "").trim() !== "--output") {
-      continue;
-    }
-    return String(normalizedArgs[index + 1] || "").trim();
-  }
-  return "";
 }

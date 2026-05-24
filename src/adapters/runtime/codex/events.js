@@ -4,12 +4,20 @@ const {
   extractThreadIdFromParams,
   extractTurnIdFromParams,
 } = require("./message-utils");
+const {
+  extractApprovalCommandTokens: extractSharedApprovalCommandTokens,
+  extractApprovalFilePath,
+  extractApprovalFilePaths,
+  buildApprovalMatchTokens,
+  buildApprovalCommandPreview,
+  normalizeCommandTokens,
+} = require("../shared/approval-command");
 
 function mapCodexMessageToRuntimeEvent(message) {
   if (message?.type === "event_msg" && message?.payload?.type === "token_count") {
     return {
-      type: "runtime.usage.updated",
-      payload: normalizeUsagePayload(message.payload),
+      type: "runtime.context.updated",
+      payload: normalizeContextPayload(message),
     };
   }
   const method = normalizeString(message?.method);
@@ -96,37 +104,40 @@ function mapCodexMessageToRuntimeEvent(message) {
     return {
       type: "runtime.approval.requested",
       payload: {
+        kind: "command",
         threadId,
         requestId: message?.id ?? null,
         reason: normalizeString(params?.reason),
         command: extractApprovalDisplayCommand(params),
-        commandTokens: extractApprovalCommandTokens(params),
+        filePath: extractApprovalFilePath(params),
+        filePaths: extractApprovalFilePaths(params),
+        commandTokens: buildApprovalMatchTokens({
+          commandTokens: extractApprovalCommandTokens(params),
+        }),
       },
     };
+  }
+
+  if (method === "mcpServer/elicitation/request") {
+    return mapMcpElicitationToApprovalEvent(message, threadId, turnId, params);
   }
 
   return null;
 }
 
-function normalizeUsagePayload(payload) {
+function normalizeContextPayload(message) {
+  const payload = message?.payload || {};
   const info = payload?.info || {};
   const total = info?.total_token_usage || {};
-  const last = info?.last_token_usage || {};
-  const rateLimits = payload?.rate_limits || {};
   return {
-    totalInputTokens: numberOrZero(total.input_tokens),
-    totalCachedInputTokens: numberOrZero(total.cached_input_tokens),
-    totalOutputTokens: numberOrZero(total.output_tokens),
-    totalReasoningTokens: numberOrZero(total.reasoning_output_tokens),
-    totalTokens: numberOrZero(total.total_tokens),
-    lastInputTokens: numberOrZero(last.input_tokens),
-    lastCachedInputTokens: numberOrZero(last.cached_input_tokens),
-    lastOutputTokens: numberOrZero(last.output_tokens),
-    lastReasoningTokens: numberOrZero(last.reasoning_output_tokens),
-    lastTotalTokens: numberOrZero(last.total_tokens),
-    modelContextWindow: numberOrZero(info?.model_context_window),
-    primaryUsedPercent: numberOrZero(rateLimits?.primary?.used_percent),
-    secondaryUsedPercent: numberOrZero(rateLimits?.secondary?.used_percent),
+    runtimeId: "codex",
+    threadId: normalizeString(payload?.thread_id || info?.thread_id),
+    inputTokens: numberOrZero(total.input_tokens),
+    cachedInputTokens: numberOrZero(total.cached_input_tokens),
+    outputTokens: numberOrZero(total.output_tokens),
+    reasoningTokens: numberOrZero(total.reasoning_output_tokens),
+    currentTokens: numberOrZero(total.total_tokens),
+    contextWindow: numberOrZero(info?.model_context_window),
   };
 }
 
@@ -150,105 +161,170 @@ function extractApprovalDisplayCommand(params) {
 }
 
 function extractApprovalCommandTokens(params) {
-  return normalizeCommandTokens(extractTokens(params));
+  return extractSharedApprovalCommandTokens(params, { scanNestedExecPolicyKeys: true });
 }
 
-function extractTokens(value) {
-  if (!value) {
+function mapMcpElicitationToApprovalEvent(message, threadId, turnId, params) {
+  const serverName = normalizeString(params?.serverName);
+  const promptMessage = normalizeLineEndings(params?.message);
+  const meta = params?._meta && typeof params._meta === "object" ? params._meta : {};
+  const approvalKind = normalizeString(meta?.codex_approval_kind);
+  const toolName = extractToolNameFromMcpPrompt(promptMessage);
+  const commandTokens = toolName
+    ? buildApprovalMatchTokens({ toolName: `mcp__${serverName}__${toolName}` })
+    : [];
+  const command = buildMcpElicitationCommand({
+    toolName,
+    promptMessage,
+    serverName,
+    toolParamsDisplay: approvalKind === "mcp_tool_call" ? extractToolParamsDisplay(meta) : [],
+  });
+  const responseTemplate = approvalKind === "mcp_tool_call"
+    ? buildMcpToolCallResponseTemplate()
+    : buildUnsupportedMcpElicitationResponseTemplate(params);
+
+  return {
+    type: "runtime.approval.requested",
+    payload: {
+      kind: approvalKind === "mcp_tool_call" ? "mcp_tool_call" : "mcp_elicitation",
+      threadId,
+      turnId,
+      requestId: message?.id ?? null,
+      reason: toolName || serverName || "MCP request",
+      command,
+      commandTokens,
+      elicitation: {
+        serverName,
+        message: promptMessage,
+        mode: normalizeString(params?.mode),
+        approvalKind,
+        toolName,
+        toolDescription: normalizeString(meta?.tool_description),
+        toolParamsDisplay: extractToolParamsDisplay(meta),
+        persistScopes: extractPersistScopes(meta),
+        responseTemplate,
+      },
+      responseTemplate,
+    },
+  };
+}
+
+function buildMcpElicitationCommand({ toolName, promptMessage, serverName, toolParamsDisplay = [] }) {
+  const lines = [];
+  if (toolName) {
+    lines.push(toolName);
+  } else if (serverName) {
+    lines.push(serverName);
+  }
+
+  const detailLines = Array.isArray(toolParamsDisplay) && toolParamsDisplay.length
+    ? toolParamsDisplay
+      .map((entry) => formatToolParamDisplayLine(entry))
+      .filter(Boolean)
+    : splitPromptDetailLines(promptMessage);
+  if (detailLines.length) {
+    lines.push(...detailLines);
+  } else if (promptMessage && !toolName) {
+    lines.push(promptMessage);
+  }
+
+  return lines.join("\n").trim();
+}
+
+function splitPromptDetailLines(promptMessage) {
+  const normalized = normalizeLineEndings(promptMessage);
+  if (!normalized) {
     return [];
   }
-  if (Array.isArray(value)) {
-    return value.every((entry) => typeof entry === "string")
-      ? value.map((entry) => entry.trim()).filter(Boolean)
-      : [];
-  }
-  if (typeof value === "string") {
-    return splitCommandLine(value);
-  }
-  if (typeof value !== "object") {
-    return [];
-  }
-
-  for (const key of ["proposedExecpolicyAmendment", "argv", "args", "command", "cmd", "exec", "shellCommand", "script"]) {
-    const tokens = extractTokens(value[key]);
-    if (tokens.length) {
-      return tokens;
-    }
-  }
-
-  for (const [key, nested] of Object.entries(value)) {
-    const normalizedKey = key.toLowerCase();
-    if (normalizedKey.includes("execpolicy") || normalizedKey.includes("exec_policy")) {
-      const tokens = extractTokens(nested);
-      if (tokens.length) {
-        return tokens;
-      }
-    }
-  }
-
-  return [];
+  return normalized
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(1);
 }
 
-function splitCommandLine(input) {
-  const tokens = [];
-  let current = "";
-  let quote = null;
-  let escaped = false;
-
-  for (const char of String(input || "")) {
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
-    }
-    if (char === "\\") {
-      escaped = true;
-      continue;
-    }
-    if (quote) {
-      if (char === quote) {
-        quote = null;
-      } else {
-        current += char;
-      }
-      continue;
-    }
-    if (char === "\"" || char === "'") {
-      quote = char;
-      continue;
-    }
-    if (/\s/.test(char)) {
-      if (current) {
-        tokens.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += char;
-  }
-
-  if (current) {
-    tokens.push(current);
-  }
-  return tokens;
-}
-
-function buildApprovalCommandPreview(tokens) {
-  const normalized = normalizeCommandTokens(tokens);
-  if (!normalized.length) {
+function extractToolNameFromMcpPrompt(promptMessage) {
+  const normalized = normalizeLineEndings(promptMessage);
+  if (!normalized) {
     return "";
   }
-  return normalized.map((token) => (token.includes(" ") ? JSON.stringify(token) : token)).join(" ");
+  const quotedMatch = normalized.match(/run tool\s+"([^"]+)"/iu);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1].trim();
+  }
+  const bareMatch = normalized.match(/run tool\s+([a-z0-9_.:-]+)/iu);
+  return bareMatch?.[1] ? bareMatch[1].trim() : "";
 }
 
-function normalizeCommandTokens(tokens) {
-  return Array.isArray(tokens)
-    ? tokens.map((part) => normalizeString(part)).filter(Boolean)
+function buildMcpToolCallResponseTemplate() {
+  return {
+    kind: "mcp_tool_call",
+    supportedCommands: ["yes", "no"],
+    responseByCommand: {
+      yes: { action: "accept" },
+      no: { action: "cancel" },
+    },
+  };
+}
+
+function buildUnsupportedMcpElicitationResponseTemplate(params) {
+  return {
+    kind: "mcp_elicitation",
+    mode: normalizeString(params?.mode),
+    supportedCommands: [],
+    responseByCommand: {},
+  };
+}
+
+function extractPersistScopes(meta) {
+  return Array.isArray(meta?.persist)
+    ? meta.persist.map((value) => normalizeString(value)).filter(Boolean)
     : [];
+}
+
+function extractToolParamsDisplay(meta) {
+  return Array.isArray(meta?.tool_params_display)
+    ? meta.tool_params_display
+      .filter((entry) => entry && typeof entry === "object")
+      .map((entry) => ({
+        name: normalizeString(entry.name),
+        displayName: normalizeString(entry.display_name) || normalizeString(entry.name),
+        value: entry.value,
+      }))
+    : [];
+}
+
+function formatToolParamDisplayLine(entry) {
+  const label = normalizeString(entry?.displayName) || normalizeString(entry?.name);
+  if (!label) {
+    return "";
+  }
+  return `${label}: ${formatToolParamValue(entry?.value)}`;
+}
+
+function formatToolParamValue(value) {
+  if (typeof value === "string") {
+    return value;
+  }
+  if (value == null) {
+    return "";
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function normalizeString(value) {
   return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeLineEndings(value) {
+  return typeof value === "string" ? value.replace(/\r\n/g, "\n").trim() : "";
 }
 
 function numberOrZero(value) {

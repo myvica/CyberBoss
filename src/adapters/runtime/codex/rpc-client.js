@@ -1,6 +1,7 @@
-const { spawn } = require("child_process");
+﻿const { spawn } = require("child_process");
 const os = require("os");
 const WebSocket = require("ws");
+const { buildCodexMcpConfigArgs } = require("./mcp-config");
 
 const IS_WINDOWS = os.platform() === "win32";
 const DEFAULT_CODEX_COMMAND = "codex";
@@ -12,11 +13,12 @@ const CODEX_CLIENT_INFO = {
 };
 
 class CodexRpcClient {
-  constructor({ endpoint = "", env = process.env, codexCommand = "", extraWritableRoots = [] }) {
+  constructor({ endpoint = "", env = process.env, codexCommand = "", extraWritableRoots = [], mcpServerConfig = null }) {
     this.endpoint = endpoint;
     this.env = env;
     this.codexCommand = codexCommand || resolveDefaultCodexCommand(env);
     this.extraWritableRoots = normalizeWritableRoots(extraWritableRoots);
+    this.mcpServerConfig = mcpServerConfig;
     this.mode = endpoint ? "websocket" : "spawn";
     this.socket = null;
     this.child = null;
@@ -36,7 +38,17 @@ class CodexRpcClient {
 
   async connect() {
     if (this.mode === "websocket") {
+      if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+        return;
+      }
+      if (this.socket && this.socket.readyState === WebSocket.CONNECTING) {
+        return await waitForSocketOpen(this.socket);
+      }
+      this.socket = null;
       await this.connectWebSocket();
+      return;
+    }
+    if (this.child && !this.child.killed) {
       return;
     }
     await this.connectSpawn();
@@ -49,7 +61,7 @@ class CodexRpcClient {
 
     for (const command of commandCandidates) {
       try {
-        const spawnSpec = buildSpawnSpec(command);
+        const spawnSpec = buildSpawnSpec(command, this.mcpServerConfig);
         child = spawn(spawnSpec.command, spawnSpec.args, {
           env: { ...this.env },
           stdio: ["pipe", "pipe", "pipe"],
@@ -112,8 +124,18 @@ class CodexRpcClient {
           code,
           reason: decodeCloseReason(reasonBuffer),
         });
+        if (this.socket === socket) {
+          this.socket = null;
+        }
       });
     });
+  }
+
+  isTransportReady() {
+    if (this.mode === "websocket") {
+      return !!this.socket && this.socket.readyState === WebSocket.OPEN;
+    }
+    return !!this.child && !this.child.killed;
   }
 
   onMessage(listener) {
@@ -135,13 +157,14 @@ class CodexRpcClient {
     this.isReady = true;
   }
 
-  async sendUserMessage({ threadId, text, model = null, effort = null, accessMode = null, workspaceRoot = "" }) {
-    const input = buildTurnInputPayload(text);
+  async sendUserMessage({ threadId, text, attachments = [], model = null, modelProvider = null, effort = null, accessMode = null, workspaceRoot = "" }) {
+    const input = buildTurnInputPayload({ text, attachments });
     return threadId
       ? this.sendRequest("turn/start", buildTurnStartParams({
         threadId,
         input,
         model,
+        modelProvider,
         effort,
         accessMode,
         workspaceRoot,
@@ -150,16 +173,33 @@ class CodexRpcClient {
       : this.sendRequest("thread/start", { input });
   }
 
-  async startThread({ cwd }) {
-    return this.sendRequest("thread/start", buildStartThreadParams(cwd));
+  async startThread({ cwd, model = "", modelProvider = "" }) {
+    return this.sendRequest("thread/start", buildStartThreadParams({ cwd, model, modelProvider }));
   }
 
-  async resumeThread({ threadId }) {
+  async resumeThread({ threadId, model = "", modelProvider = "" }) {
     const normalizedThreadId = normalizeNonEmptyString(threadId);
     if (!normalizedThreadId) {
       throw new Error("thread/resume requires a non-empty threadId");
     }
-    return this.sendRequest("thread/resume", { threadId: normalizedThreadId });
+    const params = { threadId: normalizedThreadId };
+    const normalizedModel = normalizeNonEmptyString(model);
+    const normalizedModelProvider = normalizeNonEmptyString(modelProvider);
+    if (normalizedModel) {
+      params.model = normalizedModel;
+    }
+    if (normalizedModelProvider) {
+      params.modelProvider = normalizedModelProvider;
+    }
+    return this.sendRequest("thread/resume", params);
+  }
+
+  async compactThread({ threadId }) {
+    const normalizedThreadId = normalizeNonEmptyString(threadId);
+    if (!normalizedThreadId) {
+      throw new Error("thread/compact/start requires a non-empty threadId");
+    }
+    return this.sendRequest("thread/compact/start", { threadId: normalizedThreadId });
   }
 
   async listThreads({ cursor = null, limit = 100, sortKey = "updated_at" } = {}) {
@@ -178,21 +218,9 @@ class CodexRpcClient {
     const normalizedThreadId = normalizeNonEmptyString(threadId);
     const normalizedTurnId = normalizeNonEmptyString(turnId);
     if (!normalizedThreadId || !normalizedTurnId) {
-      throw new Error("turn/cancel requires threadId and turnId");
+      throw new Error("turn/interrupt requires threadId and turnId");
     }
-    return this.sendRequest("turn/cancel", {
-      threadId: normalizedThreadId,
-      turnId: normalizedTurnId,
-    });
-  }
-
-  async cancelTurn({ threadId, turnId }) {
-    const normalizedThreadId = normalizeNonEmptyString(threadId);
-    const normalizedTurnId = normalizeNonEmptyString(turnId);
-    if (!normalizedThreadId || !normalizedTurnId) {
-      throw new Error("turn/cancel requires threadId and turnId");
-    }
-    return this.sendRequest("turn/cancel", {
+    return this.sendRequest("turn/interrupt", {
       threadId: normalizedThreadId,
       turnId: normalizedTurnId,
     });
@@ -302,26 +330,43 @@ function buildCodexCommandCandidates(configuredCommand) {
   return [DEFAULT_CODEX_COMMAND];
 }
 
-function buildSpawnSpec(command) {
+function buildSpawnSpec(command, mcpServerConfig = null) {
+  const configArgs = buildCodexConfigArgs(mcpServerConfig);
   if (IS_WINDOWS) {
     return {
       command: "cmd.exe",
-      args: ["/c", command, "app-server"],
+      args: ["/c", command, ...configArgs, "app-server"],
     };
   }
   return {
     command,
-    args: ["app-server"],
+    args: [...configArgs, "app-server"],
   };
+}
+
+function buildCodexConfigArgs(mcpServerConfig) {
+  return buildCodexMcpConfigArgs(mcpServerConfig);
 }
 
 function normalizeNonEmptyString(value) {
   return typeof value === "string" && value.trim() ? value.trim() : "";
 }
 
-function buildStartThreadParams(cwd) {
+function buildStartThreadParams({ cwd, model, modelProvider }) {
+  const params = {};
   const normalizedCwd = normalizeNonEmptyString(cwd);
-  return normalizedCwd ? { cwd: normalizedCwd } : {};
+  const normalizedModel = normalizeNonEmptyString(model);
+  const normalizedModelProvider = normalizeNonEmptyString(modelProvider);
+  if (normalizedCwd) {
+    params.cwd = normalizedCwd;
+  }
+  if (normalizedModel) {
+    params.model = normalizedModel;
+  }
+  if (normalizedModelProvider) {
+    params.modelProvider = normalizedModelProvider;
+  }
+  return params;
 }
 
 function buildListThreadsParams({ cursor, limit, sortKey }) {
@@ -335,15 +380,30 @@ function buildListThreadsParams({ cursor, limit, sortKey }) {
   return params;
 }
 
-function buildTurnInputPayload(text) {
+function buildTurnInputPayload({ text, attachments = [] }) {
+  const input = [];
   const normalizedText = normalizeNonEmptyString(text);
-  return normalizedText ? [{ type: "text", text: normalizedText }] : [];
+  if (normalizedText) {
+    input.push({ type: "text", text: normalizedText });
+  }
+  for (const attachment of Array.isArray(attachments) ? attachments : []) {
+    const absolutePath = normalizeNonEmptyString(attachment?.absolutePath);
+    if (!absolutePath) {
+      continue;
+    }
+    input.push({
+      type: "localImage",
+      path: absolutePath,
+    });
+  }
+  return input;
 }
 
-function buildTurnStartParams({ threadId, input, model, effort, accessMode, workspaceRoot, extraWritableRoots = [] }) {
+function buildTurnStartParams({ threadId, input, model, modelProvider, effort, accessMode, workspaceRoot, extraWritableRoots = [] }) {
   const params = { threadId, input };
   const normalizedWorkspaceRoot = normalizeNonEmptyString(workspaceRoot);
   const normalizedModel = normalizeNonEmptyString(model);
+  const normalizedModelProvider = normalizeNonEmptyString(modelProvider);
   const normalizedEffort = normalizeNonEmptyString(effort);
   const normalizedAccessMode = normalizeAccessMode(accessMode);
   const executionPolicies = buildExecutionPolicies(normalizedAccessMode, workspaceRoot, extraWritableRoots);
@@ -352,6 +412,9 @@ function buildTurnStartParams({ threadId, input, model, effort, accessMode, work
   }
   if (normalizedModel) {
     params.model = normalizedModel;
+  }
+  if (normalizedModelProvider) {
+    params.modelProvider = normalizedModelProvider;
   }
   if (normalizedEffort) {
     params.effort = normalizedEffort;
@@ -484,6 +547,37 @@ function sanitizeLogValue(value) {
     return "";
   }
   return JSON.stringify(normalized.length > 300 ? `${normalized.slice(0, 300)}…` : normalized);
+function waitForSocketOpen(socket) {
+  return new Promise((resolve, reject) => {
+    if (!socket) {
+      reject(new Error("Codex websocket is not connected"));
+      return;
+    }
+    if (socket.readyState === WebSocket.OPEN) {
+      resolve();
+      return;
+    }
+    const cleanup = () => {
+      socket.off("open", onOpen);
+      socket.off("error", onError);
+      socket.off("close", onClose);
+    };
+    const onOpen = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
+    const onClose = () => {
+      cleanup();
+      reject(new Error("Codex websocket is not connected"));
+    };
+    socket.on("open", onOpen);
+    socket.on("error", onError);
+    socket.on("close", onClose);
+  });
 }
 
 module.exports = { CodexRpcClient };

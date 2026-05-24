@@ -1,70 +1,68 @@
 const COMMAND_GROUPS = [
   {
     id: "lifecycle",
-    label: "启动与诊断",
+    label: "Lifecycle & Diagnostics",
     actions: [
       {
         action: "app.login",
-        summary: "发起微信扫码登录并保存账号",
+        summary: "Start WeChat QR login and save the account",
         terminal: ["login"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.accounts",
-        summary: "查看本地已保存账号",
+        summary: "List locally saved accounts",
         terminal: ["accounts"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.start",
-        summary: "启动当前 channel/runtime 主循环",
+        summary: "Start the current channel/runtime main loop",
         terminal: ["start"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.shared_start",
-        summary: "启动共享 app-server 与共享微信桥接",
+        summary: "Start the shared app-server and shared WeChat bridge",
         terminal: ["shared start"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.shared_open",
-        summary: "接入当前微信绑定的共享线程",
+        summary: "Attach to the shared thread currently bound in WeChat",
         terminal: ["shared open"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.shared_status",
-        summary: "查看共享 app-server 与共享桥接状态",
+        summary: "Show the shared app-server and bridge status",
         terminal: ["shared status"],
         weixin: [],
         status: "active",
       },
       {
         action: "app.doctor",
-        summary: "打印当前配置、边界和线程状态",
+        summary: "Print current config, boundaries, and thread state",
         terminal: ["doctor"],
         weixin: [],
         status: "active",
       },
       {
         action: "system.send",
-        summary: "向内部系统队列写入一条不可见触发消息",
-        terminal: ["system send"],
-        terminalGroup: "system",
+        summary: "Write an invisible trigger message into the internal system queue",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "system.checkin_poller",
-        summary: "按随机间隔写入主动 check-in 触发",
-        terminal: ["system checkin-poller"],
-        terminalGroup: "system",
+        summary: "Emit proactive check-in triggers at random intervals",
+        terminal: [],
         weixin: [],
         status: "active",
       },
@@ -72,73 +70,94 @@ const COMMAND_GROUPS = [
   },
   {
     id: "workspace",
-    label: "项目与线程",
+    label: "Workspace & Thread",
     actions: [
       {
         action: "workspace.bind",
-        summary: "绑定当前聊天使用的项目目录",
+        summary: "Bind the current chat to a workspace directory",
         terminal: [],
         weixin: ["/bind"],
         status: "active",
       },
       {
         action: "workspace.status",
-        summary: "查看当前项目、线程、模型与上下文使用情况",
+        summary: "Show the current workspace, thread, model, and context usage",
         terminal: [],
         weixin: ["/status"],
         status: "active",
       },
       {
         action: "thread.new",
-        summary: "切到新线程草稿",
+        summary: "Switch to a fresh thread draft",
         terminal: [],
         weixin: ["/new"],
         status: "active",
       },
       {
         action: "thread.reread",
-        summary: "让当前线程重新读取最新 instructions",
+        summary: "Make the current thread reread the latest instructions",
         terminal: [],
         weixin: ["/reread"],
         status: "active",
       },
       {
+        action: "thread.compact",
+        summary: "Compact the current thread context",
+        terminal: [],
+        weixin: ["/compact"],
+        status: "active",
+      },
+      {
         action: "thread.switch",
-        summary: "切换到指定线程",
+        summary: "Switch to a specific thread",
         terminal: [],
         weixin: ["/switch <threadId>"],
         status: "active",
       },
       {
         action: "thread.stop",
-        summary: "停止当前线程中的运行",
+        summary: "Stop the current run inside the thread",
         terminal: [],
         weixin: ["/stop"],
+        status: "active",
+      },
+      {
+        action: "system.checkin_range",
+        summary: "Reset the proactive check-in range in minutes",
+        terminal: [],
+        weixin: ["/checkin <min>-<max>"],
+        status: "active",
+      },
+      {
+        action: "channel.chunk_min",
+        summary: "Adjust the minimum short-chunk merge size for WeChat replies",
+        terminal: [],
+        weixin: ["/chunk <number>"],
         status: "active",
       },
     ],
   },
   {
     id: "approval",
-    label: "授权与控制",
+    label: "Approvals & Control",
     actions: [
       {
         action: "approval.accept_once",
-        summary: "允许当前待处理的授权请求一次",
+        summary: "Allow the current approval request once",
         terminal: [],
         weixin: ["/yes"],
         status: "active",
       },
       {
         action: "approval.accept_workspace",
-        summary: "在当前项目内持续允许同前缀命令",
+        summary: "Keep allowing matching command prefixes in the current workspace",
         terminal: [],
         weixin: ["/always"],
         status: "active",
       },
       {
         action: "approval.reject_once",
-        summary: "拒绝当前待处理的授权请求",
+        summary: "Deny the current approval request",
         terminal: [],
         weixin: ["/no"],
         status: "active",
@@ -147,89 +166,88 @@ const COMMAND_GROUPS = [
   },
   {
     id: "capabilities",
-    label: "能力集成",
+    label: "Capabilities",
     actions: [
       {
         action: "model.inspect",
-        summary: "查看当前模型",
+        summary: "Inspect the current model",
         terminal: [],
         weixin: ["/model"],
         status: "active",
       },
       {
         action: "model.select",
-        summary: "切换到指定模型",
+        summary: "Switch to a specific model",
         terminal: [],
         weixin: ["/model <id>"],
         status: "active",
       },
       {
         action: "channel.send_file",
-        summary: "将文件作为附件发送回当前聊天",
-        terminal: ["channel send-file"],
-        terminalGroup: "channel",
+        summary: "Send a local file back to the current chat as an attachment",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "timeline.write",
-        summary: "将当前上下文写入时间轴",
-        terminal: ["timeline write"],
-        terminalGroup: "timeline",
+        summary: "Write the current context into timeline",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "timeline.build",
-        summary: "构建时间轴静态页面",
-        terminal: ["timeline build"],
-        terminalGroup: "timeline",
+        summary: "Build the static timeline site",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "timeline.serve",
-        summary: "启动时间轴静态页面服务",
-        terminal: ["timeline serve"],
-        terminalGroup: "timeline",
+        summary: "Start the static timeline site server",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "timeline.dev",
-        summary: "启动时间轴热更新开发服务",
-        terminal: ["timeline dev"],
-        terminalGroup: "timeline",
+        summary: "Start the hot-reload timeline dev server",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "timeline.screenshot",
-        summary: "截图时间轴页面",
-        terminal: ["timeline screenshot"],
-        terminalGroup: "timeline",
+        summary: "Capture a timeline screenshot",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "reminder.create",
-        summary: "创建提醒并交给调度层处理",
-        terminal: ["reminder write"],
-        terminalGroup: "reminder",
+        summary: "Create a reminder and hand it to the scheduler",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
         action: "diary.append",
-        summary: "追加一条日记记录",
-        terminal: ["diary write"],
-        terminalGroup: "diary",
+        summary: "Append a diary entry",
+        terminal: [],
         weixin: [],
         status: "active",
       },
       {
+        action: "app.star",
+        summary: "Star the project on GitHub",
+        terminal: [],
+        weixin: ["/star"],
+        status: "active",
+      },
+      {
         action: "app.help",
-        summary: "查看当前通道可用命令",
+        summary: "Show currently available commands for this channel",
         terminal: ["help"],
         weixin: ["/help"],
         status: "active",
@@ -247,11 +265,16 @@ function listCommandGroups() {
 
 function buildTerminalHelpText() {
   const lines = [
-    "用法: npm run <script>",
+    "Usage: cyberboss <command>",
     "",
-    "当前终端命令：",
-    "  npm run shared:start   默认启动共享 app-server 与共享微信桥接",
-    "  npm run shared:open    默认接入当前微信绑定的共享线程",
+    "Current terminal commands:",
+    "  cyberboss start        start the WeChat bridge and runtime loop",
+    "  cyberboss login        start WeChat QR login",
+    "  cyberboss accounts     list locally saved accounts",
+    "  cyberboss doctor       print current config and thread state",
+    "  npm run shared:start   start the shared app-server and WeChat bridge",
+    "  npm run shared:open    attach to the shared thread currently bound in WeChat",
+    "  npm run shared:status  show shared bridge status",
   ];
 
   for (const group of COMMAND_GROUPS) {
@@ -265,94 +288,61 @@ function buildTerminalHelpText() {
     }
   }
 
-  const plannedGroups = collectPlannedTerminalGroups();
-  if (plannedGroups.length) {
-    lines.push("");
-    lines.push("规划中的终端子命令：");
-    for (const group of plannedGroups) {
-      lines.push(`- ${group.name}`);
-      for (const action of group.actions) {
-        lines.push(`  ${action.terminal.join(", ")}  ${action.summary}`);
-      }
-    }
-  }
-
   lines.push("");
-  lines.push("微信命令映射与后续能力动作请看 README / docs。");
+  lines.push("Cyberboss capability operations are exposed to models as project tools, not terminal subcommands.");
   return lines.join("\n");
 }
 
 function buildWeixinHelpText() {
-  const lines = ["当前可用命令："];
+  const lines = ["💡 Available commands:"];
   for (const group of COMMAND_GROUPS) {
     const activeActions = group.actions.filter((action) => action.status === "active" && action.weixin.length);
     if (!activeActions.length) {
       continue;
     }
     lines.push("");
-    lines.push(`${group.label}：`);
+    lines.push(`${groupEmoji(group.id)} 【${group.label}】`);
     for (const action of activeActions) {
-      lines.push(`- ${action.weixin.join(", ")}  ${action.summary}`);
+      lines.push(`  ${actionEmoji(action)} ${action.weixin.join(", ")} — ${action.summary}`);
     }
   }
   return lines.join("\n");
 }
 
-function buildTerminalTopicHelp(topic) {
-  const normalizedTopic = normalizeTopic(topic);
-  const actions = COMMAND_GROUPS
-    .flatMap((group) => group.actions)
-    .filter((action) => normalizeTopic(action.terminalGroup) === normalizedTopic && action.terminal.length);
-
-  if (!actions.length) {
-    return "";
+function groupEmoji(groupId) {
+  switch (groupId) {
+    case "lifecycle": return "🔄";
+    case "workspace": return "📁";
+    case "approval": return "🔐";
+    case "capabilities": return "⚡️";
+    default: return "•";
   }
-
-  const hasPlannedOnly = actions.every((action) => action.status === "planned");
-  const lines = [
-    `用法: ${buildTopicUsage(normalizedTopic)}`,
-    "",
-    hasPlannedOnly
-      ? `当前 ${normalizedTopic} 命令仍在接入中，计划中的子命令：`
-      : `当前 ${normalizedTopic} 命令：`,
-  ];
-  for (const action of actions) {
-    lines.push(`- ${formatTerminalExamples(action)}  ${action.summary}`);
-  }
-  return lines.join("\n");
 }
 
-function isPlannedTerminalTopic(topic) {
-  const normalizedTopic = normalizeTopic(topic);
-  return COMMAND_GROUPS
-    .flatMap((group) => group.actions)
-    .some((action) => normalizeTopic(action.terminalGroup) === normalizedTopic && action.terminal.length);
-}
-
-function collectPlannedTerminalGroups() {
-  const grouped = new Map();
-  for (const action of COMMAND_GROUPS.flatMap((group) => group.actions)) {
-    if (!action.terminal.length || !action.terminalGroup || action.status !== "planned") {
-      continue;
-    }
-    const key = action.terminalGroup;
-    if (!grouped.has(key)) {
-      grouped.set(key, { name: key, actions: [] });
-    }
-    grouped.get(key).actions.push(action);
+function actionEmoji(action) {
+  switch (action.action) {
+    case "workspace.bind": return "📍";
+    case "workspace.status": return "📊";
+    case "thread.new": return "🆕";
+    case "thread.reread": return "🔄";
+    case "thread.compact": return "🗜️";
+    case "thread.switch": return "🔀";
+    case "thread.stop": return "⏹️";
+    case "system.checkin_range": return "⏰";
+    case "approval.accept_once": return "✅";
+    case "approval.accept_workspace": return "💡";
+    case "approval.reject_once": return "❌";
+    case "model.inspect":
+    case "model.select": return "🤖";
+    case "app.help": return "❓";
+    case "app.star": return "⭐️";
+    default: return "•";
   }
-  return Array.from(grouped.values());
-}
-
-function normalizeTopic(value) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
 module.exports = {
   buildTerminalHelpText,
-  buildTerminalTopicHelp,
   buildWeixinHelpText,
-  isPlannedTerminalTopic,
   listCommandGroups,
 };
 
@@ -361,90 +351,24 @@ function formatTerminalExamples(action) {
   if (!terminal.length) {
     return "";
   }
-  return terminal.map((commandText) => toNpmRunExample(commandText)).join(", ");
+  return terminal.map((commandText) => toTerminalCommandExample(commandText)).join(", ");
 }
 
-function buildTopicUsage(topic) {
-  switch (topic) {
-    case "reminder":
-      return [
-        "npm run reminder:write -- <args>",
-        "",
-        "参数：",
-        "  --delay 30s|10m|1h30m|2d4h",
-        "  --at 2026-04-07T21:30+08:00 | 2026-04-07 21:30",
-        "  --text \"提醒内容\"",
-        "  --user <wechatUserId>  可选",
-      ].join("\n");
-    case "diary":
-      return [
-        "npm run diary:write -- <args>",
-        "",
-        "参数：",
-        "  --text \"内容\"",
-        "  --title \"标题\"        只影响条目标题，不决定落到哪一天",
-        "  --date YYYY-MM-DD     决定写入哪个日记文件",
-        "  --time HH:mm          可选，覆盖条目时间",
-        "",
-        "示例：",
-        "  npm run diary:write -- --date 2026-04-06 --title \"4.6\" --text \"内容\"",
-      ].join("\n");
-    case "channel":
-      return [
-        "npm run channel:send-file -- --path /绝对路径 [--user <wechatUserId>]",
-        "",
-        "参数：",
-        "  --path /绝对路径         要发回当前微信聊天的本地文件",
-        "  --user <wechatUserId>   可选，覆盖默认接收用户",
-      ].join("\n");
-    case "system":
-      return "npm run system:send -- <args> / npm run system:checkin";
-    case "timeline":
-      return [
-        "npm run timeline:write -- <args> / npm run timeline:build / npm run timeline:serve / npm run timeline:dev / npm run timeline:screenshot -- --send",
-        "",
-        "补充：",
-        "  timeline 截图稳定入口是 npm run timeline:screenshot -- --send，它会把任务交给当前微信桥执行",
-      ].join("\n");
-    default:
-      return "npm run <script>";
-  }
-}
-
-function toNpmRunExample(commandText) {
+function toTerminalCommandExample(commandText) {
   const normalized = typeof commandText === "string" ? commandText.trim() : "";
   switch (normalized) {
     case "login":
     case "accounts":
     case "start":
+    case "doctor":
+    case "help":
+      return `cyberboss ${normalized}`;
     case "shared start":
     case "shared open":
     case "shared status":
-    case "doctor":
-    case "help":
       return `npm run ${normalized.replace(" ", ":")}`;
     case "start --checkin":
-      return "npm run start:checkin";
-    case "reminder write":
-      return "npm run reminder:write -- <args>";
-    case "diary write":
-      return "npm run diary:write -- <args>";
-    case "channel send-file":
-      return "npm run channel:send-file -- --path /绝对路径";
-    case "system send":
-      return "npm run system:send -- <args>";
-    case "system checkin-poller":
-      return "npm run system:checkin";
-    case "timeline write":
-      return "npm run timeline:write -- <args>";
-    case "timeline build":
-      return "npm run timeline:build";
-    case "timeline serve":
-      return "npm run timeline:serve";
-    case "timeline dev":
-      return "npm run timeline:dev";
-    case "timeline screenshot":
-      return "npm run timeline:screenshot -- --send";
+      return "cyberboss start --checkin";
     default:
       return normalized;
   }

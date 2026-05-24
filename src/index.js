@@ -6,18 +6,11 @@ const dotenv = require("dotenv");
 const { readConfig } = require("./core/config");
 const { renderInstructionTemplate } = require("./core/instructions-template");
 const { CyberbossApp } = require("./core/app");
-const { createTimelineIntegration } = require("./integrations/timeline");
-const { runDiaryWriteCommand } = require("./app/diary-write-cli");
-const { runReminderWriteCommand } = require("./app/reminder-write-cli");
-const { runChannelSendFileCommand } = require("./app/channel-send-file-cli");
-const { runTimelineScreenshotCommand } = require("./app/timeline-screenshot-cli");
 const { runSystemCheckinPoller } = require("./app/system-checkin-poller");
-const { runSystemSendCommand } = require("./app/system-send-cli");
-const {
-  buildTerminalHelpText,
-  buildTerminalTopicHelp,
-  isPlannedTerminalTopic,
-} = require("./core/command-registry");
+const { buildTerminalHelpText } = require("./core/command-registry");
+const { ensureStickerCatalogFilesSync } = require("./services/sticker-service");
+const { createProjectTooling } = require("./tools/create-project-tooling");
+const { runToolMcpServer } = require("./tools/mcp-stdio-server");
 
 function ensureDefaultStateDirectory() {
   fs.mkdirSync(path.join(os.homedir(), ".cyberboss"), { recursive: true });
@@ -47,6 +40,7 @@ function ensureRuntimeEnv() {
 
 function ensureBootstrapFiles(config) {
   ensureInstructionsTemplate(config);
+  ensureStickerCatalogFilesSync(config);
 }
 
 function ensureInstructionsTemplate(config) {
@@ -65,7 +59,7 @@ function ensureInstructionsTemplate(config) {
     return;
   }
 
-  const userName = String(config?.userName || "").trim() || "用户";
+  const userName = String(config?.userName || "").trim() || "User";
   const content = renderInstructionTemplate(template, {
     ...config,
     userName,
@@ -106,7 +100,6 @@ async function main() {
   const config = readConfig();
   ensureBootstrapFiles(config);
   const command = config.mode || "help";
-  const subcommand = argv[1] || "";
   let app = null;
   const getApp = () => {
     if (!app) {
@@ -116,65 +109,7 @@ async function main() {
   };
 
   if (command === "help" || command === "--help" || command === "-h") {
-    const topicHelp = subcommand ? buildTerminalTopicHelp(subcommand) : "";
-    console.log(topicHelp || buildTerminalHelpText());
-    return;
-  }
-
-  if (isPlannedTerminalTopic(command)) {
-    const topicHelp = buildTerminalTopicHelp(command);
-    const subcommandArgs = argv.slice(2);
-    const wantsSubcommandHelp = subcommandArgs.includes("--help") || subcommandArgs.includes("-h");
-    if (subcommand === "help" || !subcommand) {
-      console.log(topicHelp);
-      return;
-    }
-    if (command === "diary" && subcommand === "write") {
-      if (wantsSubcommandHelp) {
-        console.log(topicHelp);
-        return;
-      }
-      await runDiaryWriteCommand(config);
-      return;
-    }
-    if (command === "reminder" && subcommand === "write") {
-      if (wantsSubcommandHelp) {
-        console.log(topicHelp);
-        return;
-      }
-      await runReminderWriteCommand(config);
-      return;
-    }
-    if (command === "system" && subcommand === "send") {
-      await runSystemSendCommand(config);
-      return;
-    }
-    if (command === "system" && subcommand === "checkin-poller") {
-      await runSystemCheckinPoller(config);
-      return;
-    }
-    if (command === "channel" && subcommand === "send-file") {
-      await runChannelSendFileCommand(getApp());
-      return;
-    }
-  }
-
-  if (command === "timeline") {
-    const timelineIntegration = createTimelineIntegration(config);
-    if (!subcommand || subcommand === "help") {
-      console.log(buildTerminalTopicHelp("timeline"));
-      return;
-    }
-    if (subcommand === "screenshot") {
-      const screenshotArgs = argv.slice(2);
-      if (screenshotArgs.includes("--help") || screenshotArgs.includes("-h")) {
-        await timelineIntegration.runSubcommand(subcommand, screenshotArgs);
-        return;
-      }
-      await runTimelineScreenshotCommand(config, argv.slice(2));
-      return;
-    }
-    await timelineIntegration.runSubcommand(subcommand, argv.slice(2));
+    console.log(buildTerminalHelpText());
     return;
   }
 
@@ -198,7 +133,27 @@ async function main() {
     return;
   }
 
-  throw new Error(`未知命令: ${command}`);
+  if (command === "tool-mcp-server") {
+    const runtimeId = readFlagValue(argv.slice(1), "--runtime-id") || "";
+    const workspaceRoot = readFlagValue(argv.slice(1), "--workspace-root") || process.cwd();
+    const { toolHost } = createProjectTooling(config);
+    runToolMcpServer({ toolHost, runtimeId, workspaceRoot });
+    return;
+  }
+
+  throw new Error(`Unknown command: ${command}`);
 }
 
 module.exports = { main };
+
+function readFlagValue(args, flag) {
+  if (!Array.isArray(args)) {
+    return "";
+  }
+  for (let index = 0; index < args.length; index += 1) {
+    if (args[index] === flag) {
+      return String(args[index + 1] || "").trim();
+    }
+  }
+  return "";
+}

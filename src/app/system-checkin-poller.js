@@ -2,30 +2,28 @@ const crypto = require("crypto");
 
 const { resolveSelectedAccount } = require("../adapters/channel/weixin/account-store");
 const { SessionStore } = require("../adapters/runtime/codex/session-store");
+const { CheckinConfigStore, resolveDefaultCheckinRange } = require("../core/checkin-config-store");
 const { resolvePreferredSenderId, resolvePreferredWorkspaceRoot } = require("../core/default-targets");
 const { SystemMessageQueueStore } = require("../core/system-message-queue-store");
 
-const DEFAULT_MIN_INTERVAL_MS = 3 * 60_000;
-const DEFAULT_MAX_INTERVAL_MS = 60 * 60_000;
-const INTERNAL_CHECKIN_TRIGGER_TEMPLATE = "Decide whether to reach out to %USER% now. You may stay silent, send one short WeChat message, update diary/timeline, or take another useful action. If no user-visible message should be sent, output exactly SILENT. If you do send a message, output only the message text.";
+const INTERNAL_CHECKIN_TRIGGER_TEMPLATE = "%USER% comes to mind again.";
 
 async function runSystemCheckinPoller(config) {
   const account = resolveSelectedAccount(config);
   const queue = new SystemMessageQueueStore({ filePath: config.systemMessageQueueFile });
+  const checkinConfigStore = new CheckinConfigStore({ filePath: config.checkinConfigFile });
   const sessionStore = new SessionStore({ filePath: config.sessionsFile });
   const target = resolvePollerTarget({ config, account, sessionStore });
-  const minIntervalMs = readIntervalMs(process.env.CYBERBOSS_CHECKIN_MIN_INTERVAL_MS, DEFAULT_MIN_INTERVAL_MS);
-  const maxIntervalMs = Math.max(
-    minIntervalMs,
-    readIntervalMs(process.env.CYBERBOSS_CHECKIN_MAX_INTERVAL_MS, DEFAULT_MAX_INTERVAL_MS)
-  );
+  const defaultRange = resolveDefaultCheckinRange();
+  let currentRange = checkinConfigStore.getRange(defaultRange);
 
   console.log(`[cyberboss] checkin poller ready user=${target.senderId} workspace=${target.workspaceRoot}`);
-  console.log(`[cyberboss] checkin interval range ${Math.round(minIntervalMs / 60000)}m-${Math.round(maxIntervalMs / 60000)}m`);
+  console.log(`[cyberboss] checkin interval range ${formatRangeMinutes(currentRange)}`);
 
   while (true) {
-    const delayMs = pickRandomDelayMs(minIntervalMs, maxIntervalMs);
-    const wakeAt = new Date(Date.now() + delayMs).toISOString();
+    currentRange = checkinConfigStore.getRange(defaultRange);
+    const delayMs = pickRandomDelayMs(currentRange.minIntervalMs, currentRange.maxIntervalMs);
+    const wakeAt = formatLocalTime(Date.now() + delayMs);
     console.log(`[cyberboss] next checkin in ${Math.round(delayMs / 60000)}m at ${wakeAt}`);
     await sleep(delayMs);
 
@@ -62,18 +60,13 @@ function resolvePollerTarget({ config, account, sessionStore }) {
   });
 
   if (!senderId) {
-    throw new Error("无法确定 checkin poller 的微信用户，先配置 CYBERBOSS_CHECKIN_USER_ID 或让唯一活跃用户先和 bot 聊过一次");
+    throw new Error("Cannot determine the WeChat user for the checkin poller. Set CYBERBOSS_CHECKIN_USER_ID or let the only active user talk to the bot once first.");
   }
   if (!workspaceRoot) {
-    throw new Error("无法确定 checkin poller 的 workspace，先设置 CYBERBOSS_WORKSPACE_ROOT");
+    throw new Error("Cannot determine the workspace for the checkin poller. Set CYBERBOSS_WORKSPACE_ROOT first.");
   }
 
   return { senderId, workspaceRoot };
-}
-
-function readIntervalMs(rawValue, fallback) {
-  const parsed = Number.parseInt(String(rawValue || ""), 10);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function pickRandomDelayMs(minIntervalMs, maxIntervalMs) {
@@ -91,8 +84,29 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function formatLocalTime(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return String(value || "");
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(date).replace(/\//g, "-");
+}
+
+function formatRangeMinutes(range) {
+  return `${Math.round(range.minIntervalMs / 60000)}m-${Math.round(range.maxIntervalMs / 60000)}m`;
+}
+
 function buildCheckinTrigger(config) {
-  const userName = normalizeText(config?.userName) || "用户";
+  const userName = normalizeText(config?.userName) || "the user";
   return INTERNAL_CHECKIN_TRIGGER_TEMPLATE.replace("%USER%", userName);
 }
 

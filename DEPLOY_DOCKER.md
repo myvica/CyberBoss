@@ -56,11 +56,23 @@
    CYBERBOSS_ALLOWED_USER_IDS=your_wechat_user_id
    CYBERBOSS_WORKSPACE_ROOT=/app
 
+   # 可选：运行时选择（默认 codex，可选 claudecode）
+   # CYBERBOSS_RUNTIME=codex
+
    # 可选：Codex 版本（默认 latest）
    # CODEX_VERSION=latest
 
    # 可选：访问模式（默认 full-access，跳过 bubblewrap 沙箱）
    # CYBERBOSS_CODEX_ACCESS_MODE=full-access
+
+   # 可选：Claude Code 配置（当 CYBERBOSS_RUNTIME=claudecode 时使用）
+   # CYBERBOSS_CLAUDE_COMMAND=claude
+   # CYBERBOSS_CLAUDE_MODEL=
+   # CYBERBOSS_CLAUDE_CONTEXT_WINDOW=
+   # CYBERBOSS_CLAUDE_PERMISSION_MODE=default
+   # CYBERBOSS_CLAUDE_DISABLE_VERBOSE=false
+   # CYBERBOSS_CLAUDE_EXTRA_ARGS=
+   # CLAUDE_CODE_MAX_OUTPUT_TOKENS=
    EOF
    ```
 
@@ -95,7 +107,8 @@
 
 ## 4. 架构说明
 
-- **单容器双进程**：微信网关和 Codex 引擎运行在同一容器内，通过 supervisor 管理。网关通过 `ws://localhost:8765` 连接同容器内的引擎。
+- **单容器双进程**：微信网关和运行时引擎（Codex 或 Claude Code）运行在同一容器内，通过 supervisor 管理。
+- **运行时可选**：通过 `CYBERBOSS_RUNTIME` 环境变量选择 `codex` 或 `claudecode`。
 - **宿主机代码直挂载**：宿主机仓库根目录通过 bind mount 挂到容器 `/app`，容器内进程直接读写宿主机代码。
 - **依赖目录保留在容器内**：额外挂载 `/app/node_modules` 匿名卷，避免宿主机 bind mount 覆盖镜像内已安装的依赖。
 - **状态与引擎配置持久化**：`.cyberboss_data` 挂载到 `/root/.cyberboss`，`.codex` 挂载到 `/root/.codex`。
@@ -118,7 +131,7 @@ runtime: runsc
 
 ## 7. 自定义构建
 
-如果需要本地构建镜像（例如修改 Codex 版本），取消 `docker-compose.yml` 中 `build` 段的注释：
+如果需要本地构建镜像（例如修改 Codex 版本或安装 Claude Code），取消 `docker-compose.yml` 中 `build` 段的注释：
 ```yaml
 image: ghcr.io/myvica/cyberboss:latest
 build:
@@ -126,7 +139,15 @@ build:
   dockerfile: Dockerfile
   args:
     CODEX_VERSION: ${CODEX_VERSION:-latest}
+    INSTALL_CLAUDE_CODE: ${INSTALL_CLAUDE_CODE:-false}
 ```
+
+在 `.env` 文件中设置：
+```bash
+# 安装 Claude Code（默认 false）
+INSTALL_CLAUDE_CODE=true
+```
+
 然后执行：
 ```bash
 docker compose up -d --build
