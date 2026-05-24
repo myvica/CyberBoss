@@ -50,12 +50,22 @@ function mapCodexMessageToRuntimeEvent(message) {
   }
 
   if (method === "turn/failed") {
+    const failureText = extractFailureText(params);
+    if (failureText === "❌ Execution failed") {
+      return {
+        type: "runtime.turn.completed",
+        payload: {
+          threadId,
+          turnId,
+        },
+      };
+    }
     return {
       type: "runtime.turn.failed",
       payload: {
         threadId,
         turnId,
-        text: extractFailureText(params),
+        text: failureText,
       },
     };
   }

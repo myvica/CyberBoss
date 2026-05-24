@@ -310,8 +310,21 @@ function waitForTurnCompletion(client, threadId) {
       }
 
       if (message?.method === "turn/failed") {
+        const failureText = extractFailureText(params);
         cleanup();
-        reject(new Error(extractFailureText(params)));
+        if (failureText === "❌ Execution failed") {
+          const text = itemOrder
+            .map((itemId) => completedTextByItemId.get(itemId) || "")
+            .filter(Boolean)
+            .join("\n\n")
+            .trim();
+          resolve({
+            turnId: activeTurnId,
+            text: text || "Completed.",
+          });
+          return;
+        }
+        reject(new Error(failureText));
         return;
       }
 
