@@ -17,6 +17,9 @@ RUN apk add --no-cache \
 
 RUN mkdir -p /var/log/supervisor
 
+RUN git config --global url."https://github.com/".insteadOf "ssh://git@github.com/"
+RUN git config --global url."https://github.com/".insteadOf "git@github.com:"
+
 ENV CYBERBOSS_SCREENSHOT_CHROME_PATH=/usr/bin/chromium
 ENV TIMELINE_FOR_AGENT_CHROME_PATH=/usr/bin/chromium
 ENV CODEX_VERSION=${CODEX_VERSION}

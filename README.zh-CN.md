@@ -1,279 +1,245 @@
-﻿<div align="center">
+<div align="center">
 
-涓枃 路 [English](./README.md)
+中文 · [English](./README.md)
 
-# 銆婇湼閬撴€昏鐖变笂鎮ｆ湁 ADHD 鐨勬垜銆?## 鏀寔 Codex 涓?Claude Code 鐨勫井淇℃ˉ鎺ョ郴缁燂細Cyberboss
+# 《霸道总裁爱上患有 ADHD 的我》
+## 基于 Codex 的微信桥接系统：Cyberboss
 
-> 鈥滀綘灏界鍦ㄥ宸磋兒閲岄€冮伩锛屼絾鎴戞案杩滀細鍦ㄤ笅涓€涓椂闂存埑鎶撳埌浣犮€傗€?
+> “你尽管在多巴胺里逃避，但我永远会在下一个时间戳抓到你。”
+
 [![Node >=22](https://img.shields.io/badge/Node-22%2B-3C873A)](./package.json)
 [![License: AGPLv3](https://img.shields.io/badge/License-AGPLv3-b31b1b)](./LICENSE)
-[![Runtime-Codex%20%7C%20ClaudeCode](https://img.shields.io/badge/Runtime-Codex%20%7C%20ClaudeCode-111827)](#technical-stack)
+[![Runtime-Codex](https://img.shields.io/badge/Runtime-Codex-111827)](#technical-stack)
 [![Bridge-Weixin](https://img.shields.io/badge/Bridge-Weixin-07C160)](#technical-stack)
 [![Timeline-Enabled](https://img.shields.io/badge/Timeline-Enabled-8b5cf6)](#core-features)
 
 <p>
-  <a href="#user-guide">鐢ㄦ埛浣跨敤</a> 路
-  <a href="#agent-guide">Agent 鎺ュ叆</a> 路
-  <a href="#data-dir">鏈湴鏁版嵁</a> 路
+  <a href="#user-guide">用户使用</a> ·
+  <a href="#agent-guide">Agent 接入</a> ·
+  <a href="#data-dir">本地数据</a> ·
   <a href="#faq">FAQ</a>
 </p>
 
 </div>
 
 <p align="center">
-  <img src="./docs/images/chat-example-1.jpg" alt="Cyberboss 绀轰緥瀵硅瘽 1" width="23%" />
-  <img src="./docs/images/chat-example-2.jpg" alt="Cyberboss 绀轰緥瀵硅瘽 2" width="23%" />
-  <img src="./docs/images/chat-example-3.jpg" alt="Cyberboss 绀轰緥瀵硅瘽 3" width="23%" />
-  <img src="./docs/images/chat-example-4.jpg" alt="Cyberboss 绀轰緥瀵硅瘽 4" width="23%" />
+  <img src="./docs/images/IMG_0241.PNG" alt="Cyberboss 示例对话 1" width="31%" />
+  <img src="./docs/images/IMG_0244.PNG" alt="Cyberboss 示例对话 2" width="31%" />
+  <img src="./docs/images/IMG_0245.PNG" alt="Cyberboss 示例对话 3" width="31%" />
 </p>
 
-Cyberboss 涓嶆槸鍙︿竴涓钩搴哥殑鐣寗閽燂紝涔熶笉鏄竴涓彧浼氬爢绉换鍔＄殑寰呭姙娓呭崟銆?
-瀹冩槸涓€涓妸鏈湴 coding runtime 娣卞害鎺ュ叆寰俊鐨?Agent Bridge銆傚綋鍓嶅悓鏃舵敮鎸?Codex 鍜?Claude Code锛屼絾鏃ュ父浣跨敤鍛戒护鍜岃涓轰繚鎸佷竴鑷淬€傚畠鐨勫瓨鍦ㄤ笉鏄负浜嗏€滄彁閱掍綘寮€濮嬧€濓紝鑰屾槸鐩存帴鍖栬韩涓洪偅涓嫢鏈夌粷瀵规椂闂存劅銆佺洴姝昏繘搴︺€佸湪浣犳秷澶卞お涔呮椂浼氫富鍔ㄧ牬灞忚€屽嚭鐨勨€滆禌鍗氳€佹澘鈥濄€?
-## 涓轰粈涔堥渶瑕?Cyberboss锛?
-瀵逛簬 ADHD 鎴栦换浣曢渶瑕侀珮寮哄害澶栭儴鐩戠鐨勪汉鏉ヨ锛屼紶缁熷伐鍏锋渶澶х殑 Bug 鍦ㄤ簬锛氬畠浠兘瀵勫笇鏈涗簬浣犵殑鈥滀富鍔ㄦ€р€濄€備絾褰撳唴鍦ㄩ┍鍔ㄥ姏澶辩伒鏃讹紝浠讳綍闇€瑕佹墜鍔ㄥ紑鍚殑 App 閮芥槸鎽嗚銆?
-Cyberboss 鐨勯€昏緫鏄鐞嗘潈鐨勮娓★細
+Cyberboss 不是另一个平庸的番茄钟，也不是一个只会堆积任务的待办清单。
 
-- 鏃犻渶涓诲姩鐐瑰紑濮?  瀹冨氨鍦ㄤ綘鐨勫井淇￠噷锛岀洴鐫€浣犵殑姣忎竴鍙ヨ瘽銆?- 涓嶅彲閫冮伩鐨勬劅鐭?  瀹冩竻妤氫綘娌夐粯鐨勬瘡涓€鍒嗛挓鎰忓懗鐫€浠€涔堛€?- 鐪熷疄鐨勫閮ㄥ弽棣?  鏃㈢劧浣犳棤娉曡嚜寰嬶紝閭ｅ氨鎶婄鐞嗘潈浜ょ粰涓€涓案杩滃湪绾裤€佹嫢鏈夊畬缇庤蹇嗐€佷笖浼氭寔缁拷韪笂涓嬫枃鐨?AI銆?
+它是一个将 Codex 深度接入微信的 Agent Bridge。它的存在不是为了“提醒你开始”，而是直接化身为那个拥有绝对时间感、盯死进度、在你消失太久时会主动破屏而出的“赛博老板”。
+
+## 为什么需要 Cyberboss？
+
+> **⚠️ 服务器部署注意**：如果你打算在服务器（如 Debian/Ubuntu）上运行，而不是在个人电脑上运行，请**不要**使用默认的 `npm run shared:start` 命令，因为它没有任何沙箱隔离。请严格按照 [Docker 部署指南](./DEPLOY_DOCKER.md) 的说明，通过 `supervisor` 运行网关与 Codex 引擎。当前 Docker 配置会把宿主机仓库直接挂载到容器 `/app`，因此容器内的代码修改和 AI 操作会直接影响宿主机项目文件。
+
+对于 ADHD 或任何需要高强度外部监管的人来说，传统工具最大的 Bug 在于：它们都寄希望于你的“主动性”。但当内在驱动力失灵时，任何需要手动开启的 App 都是摆设。
+
+Cyberboss 的逻辑是管理权的让渡：
+
+- 无需主动点开始
+  它就在你的微信里，盯着你的每一句话。
+- 不可逃避的感知
+  它清楚你沉默的每一分钟意味着什么。
+- 真实的外部反馈
+  既然你无法自律，那就把管理权交给一个永远在线、拥有完美记忆、且会持续追踪上下文的 AI。
+
 <a id="core-features"></a>
-## 鏍稿績鍔熻兘锛氬叏鑷姩鐨勮禌鍗氱洃绠?
-1. 缁濆鏃堕棿鎰?(Omniscient Time)
-姣忎竴鏉″井淇¤緭鍏ュ湪杩涘叆 runtime 鍓嶏紝閮戒細琚嚜鍔ㄦ墦涓婃湰鍦版椂闂存埑銆傛ā鍨嬩笉鍐嶅彧鏄鐞嗘枃鏈紝瀹冨湪澶勭悊鈥滄椂闂存祦鈥濄€傚畠鐭ラ亾浣犱笂涓€绉掑湪淇¤獡鏃︽棪锛屼篃鐭ラ亾浣犳帴涓嬫潵鐨勪笁涓皬鏃跺湪浜洪棿钂稿彂銆?
-2. 鐢熸椿杞ㄨ抗鑷姩鍖栨姤琛?(The Ledger of Life)
-鍩轰簬宸茬煡鐨勬秷鎭椂闂存埑锛屽畠浼氬儚瀹¤鍛樹竴鏍锋寔缁ˉ鍏ㄤ綘鍏ㄥぉ浜嬩欢鐨勫紑濮嬨€佺粨鏉熷拰鏃堕暱锛岃嚜鍔ㄥ皢缁嗙鐨勮亰澶╄褰曡劚姘淬€侀噸鏋勪负缁撴瀯鍖栨椂闂磋酱锛屽苟瀹氭湡鍚戜綘杈撳嚭鈥滃鍒戞姤琛ㄢ€濄€?
-3. 闅忔満杞鍞ら啋 (Stochastic Pulse)
-绯荤粺浼氬湪闅忔満棰戠巼鍐呬富鍔ㄦ埑閱掓ā鍨嬨€傚畠浼氭牴鎹綋鍓嶄笂涓嬫枃鑷富鍒ゆ柇锛氭槸璇ユ俯鏌旀彁閱掋€佷弗鍘夊偓淇冦€侀粯榛樺啓鏃ヨ锛岃繕鏄皟鐢ㄥ伐鍏锋煡鐪嬩綘鐨勭姸鎬併€傝繖绉嶄笉鍙娴嬬殑鈥滄煡宀椻€濇劅锛屾槸鏉€鎺?ADHD 鎷栧欢鐥囩殑鑹嵂銆?
-4. 璺ㄦ椂绌鸿嚜鎴戝敜閱?(Local Reminder Queue)
-Reminder 闃熷垪涓嶆槸缁欑敤鎴疯鐨勯椆閽燂紝鑰屾槸妯″瀷鐣欑粰鏈潵鑷繁鐨勪紡绗斻€?
-> 鈥滅害瀹?10:00 璧峰簥锛?0:05 浠栬嫢娌℃敹鍒颁綘鐨勬秷鎭紝灏嗚嚜鍔ㄨ皟鐢ㄧ背瀹?MCP 寮鸿鎷夊紑绐楀笜骞舵斁姝屻€傗€?
-5. 闆舵垚鏈湰鍦版棩蹇?(Zero-Token Diary)
-瀹冧細灏嗙湡姝ｅ€煎緱鐣欎笅鐨勭敓娲荤棔杩规矇娣€鍒版湰鍦帮紝涓嶄緷璧栫涓夋柟浜戞湇鍔★紝涓嶇儳棰濆涓婁笅鏂囷紝鍗磋兘鐣欎綇浣犱滑涔嬮棿鏈€鐪熷疄鐨勮繛鎺ャ€?
-## 涔熷彲浠ュ崟鐙娇鐢?Timeline
+## 核心功能：全自动的赛博监管
 
-濡傛灉浣犲 `Cyberboss` 閲屾渶鎰熷叴瓒ｇ殑鏄€滅敓娲昏建杩硅嚜鍔ㄥ寲鎶ヨ〃鈥濊繖涓€灞傦紝閭ｄ箞涔熷彲浠ョ洿鎺ユ妸鏃堕棿杞磋兘鍔涘崟鐙嬁鍑哄幓鐢細
+1. 绝对时间感 (Omniscient Time)
+每一条微信输入在进入 runtime 前，都会被自动打上本地时间戳。模型不再只是处理文本，它在处理“时间流”。它知道你上一秒在信誓旦旦，也知道你接下来的三个小时在人间蒸发。
 
-- 椤圭洰鍦板潃锛歔WenXiaoWendy/timeline-for-agent](https://github.com/WenXiaoWendy/timeline-for-agent)
-- 瀹冩湰韬氨鏄嫭绔嬮」鐩紝涓嶄緷璧栧井淇℃ˉ鎺ユ墠鑳藉伐浣?- 濡傛灉浣犱笉鎯充娇鐢?Codex锛屼篃瀹屽叏鍙互鎶?`timeline-for-agent` 鎺ヨ繘浣犺嚜宸辩殑 agent銆乥ot 鎴栬嚜鍔ㄥ寲绯荤粺閲?
-`Cyberboss` 鐨勬椂闂磋酱鑳藉姏鏈川涓婁篃鏄瀯寤哄湪 `timeline-for-agent` 涔嬩笂锛屽彧鏄繖閲岄澶栨妸瀹冩帴杩涗簡寰俊銆佹彁閱掋€佹棩璁板拰闅忔満杞杩欐暣濂楃敓娲荤洃绠￠摼璺噷銆?
+2. 生活轨迹自动化报表 (The Ledger of Life)
+基于已知的消息时间戳，它会像审计员一样持续补全你全天事件的开始、结束和时长，自动将细碎的聊天记录脱水、重构为结构化时间轴，并定期向你输出“处刑报表”。
+
+3. 随机轮询唤醒 (Stochastic Pulse)
+系统会在随机频率内主动戳醒模型。它会根据当前上下文自主判断：是该温柔提醒、严厉催促、默默写日记，还是调用工具查看你的状态。这种不可预测的“查岗”感，是杀掉 ADHD 拖延症的良药。
+
+4. 跨时空自我唤醒 (Local Reminder Queue)
+Reminder 队列不是给用户设的闹钟，而是模型留给未来自己的伏笔。
+
+> “约定 10:00 起床，10:05 他若没收到你的消息，将自动调用米家 MCP 强行拉开窗帘并放歌。”
+
+5. 零成本本地日志 (Zero-Token Diary)
+它会将真正值得留下的生活痕迹沉淀到本地，不依赖第三方云服务，不烧额外上下文，却能留住你们之间最真实的连接。
+
+## 也可以单独使用 Timeline
+
+如果你对 `Cyberboss` 里最感兴趣的是“生活轨迹自动化报表”这一层，那么也可以直接把时间轴能力单独拿出去用：
+
+- 项目地址：[WenXiaoWendy/timeline-for-agent](https://github.com/WenXiaoWendy/timeline-for-agent)
+- 它本身就是独立项目，不依赖微信桥接才能工作
+- 如果你不想使用 Codex，也完全可以把 `timeline-for-agent` 接进你自己的 agent、bot 或自动化系统里
+
+`Cyberboss` 的时间轴能力本质上也是构建在 `timeline-for-agent` 之上，只是这里额外把它接进了微信、提醒、日记和随机轮询这整套生活监管链路里。
+
 <a id="technical-stack"></a>
-## 鎶€鏈疄鐜?
+## 技术实现
+
 - **Core**
-  鍙垏鎹㈢殑 Codex / Claude Code runtime 灞傦紝瀵瑰淇濇寔鍚屼竴濂楀井淇″懡浠や笌鍏变韩绾跨▼宸ヤ綔娴併€?- **Bridge**
-  寰俊 HTTP bridge锛屾敮鎸侀暱杞鍚屾锛屾妸寰俊渚ц緭鍏ャ€佽緭鍑恒€佹枃浠跺拰鐘舵€佸彉鍖栨帴鍒板悓涓€鏉?agent 閾捐矾閲屻€?- **Task System**
-  鏈湴浠诲姟闃熷垪锛屽綋鍓嶅寘鍚?reminder銆乻ystem message銆乼imeline screenshot 涓夌被寮傛浠诲姟銆?- **Capability Layer**
-  娑电洊 Timeline銆丏iary銆丆heck-in銆丗ile Transfer 绛夋牳蹇冭兘鍔涳紝鍏朵腑 `checkin` 灏辨槸闅忔満杞鍞ら啋鍏ュ彛銆?- **Optional Tooling**
-  鏀寔鎺ュ叆 MCP 涓庡叾浠栨湰鍦扮‖浠?杞欢鎺ュ彛锛涙槸鍚﹀惎鐢ㄥ畬鍏ㄥ彇鍐充簬浣犵殑鏈湴鐜銆?
-## 寮€鍙戝垵琛凤細鎷掔粷鈥滆嚜寰嬬璇濃€?
-瀵逛簬 ADHD 鏉ヨ锛岄棶棰樹粠鏉ヤ笉鏄€滀笉鎳傞亾鐞嗏€濓紝鑰屾槸鈥滄剰蹇楀姏鏂眰鈥濄€?
-- 鐣寗閽熻姹備綘鍏堣嚜寰?- 寰呭姙娓呭崟瑕佹眰浣犲厛鏁寸悊
-- 鎻愰啋杞欢瑕佹眰浣犲厛鈥滆寰楀幓鐩镐俊鈥濆畠
+  Codex runtime 与共享 `codex app-server`，负责承接微信消息、维持线程状态、执行工具与审批流。
+- **Bridge**
+  微信 HTTP bridge，支持长轮询同步，把微信侧输入、输出、文件和状态变化接到同一条 agent 链路里。
+- **Task System**
+  本地任务队列，当前包含 reminder、system message、timeline screenshot 三类异步任务。
+- **Capability Layer**
+  涵盖 Timeline、Diary、Check-in、File Transfer 等核心能力，其中 `checkin` 就是随机轮询唤醒入口。
+- **Optional Tooling**
+  支持接入 MCP 与其他本地硬件/软件接口；是否启用完全取决于你的本地环境。
 
-Cyberboss 鍋囪浣犳槸涓€涓畬鍏ㄤ笉鍙帶鐨勪釜浣擄細浣犱笉闇€瑕佸厛鐐瑰紑濮嬶紝涓嶉渶瑕佸厛璁板緱鍥炴潵锛岀敋鑷充笉闇€瑕佸厛鎷ユ湁鎵ц鎰忓織銆備綘鍙渶瑕佺户缁椿鐫€銆佺户缁亰澶╋紝鍓╀笅鐨勭敱绯荤粺鍘昏褰曟椂闂淬€佽ˉ榻愯建杩广€佷富鍔ㄥ嚭鐜般€?
+## 开发初衷：拒绝“自律神话”
+
+对于 ADHD 来说，问题从来不是“不懂道理”，而是“意志力断层”。
+
+- 番茄钟要求你先自律
+- 待办清单要求你先整理
+- 提醒软件要求你先“记得去相信”它
+
+Cyberboss 假设你是一个完全不可控的个体：你不需要先点开始，不需要先记得回来，甚至不需要先拥有执行意志。你只需要继续活着、继续聊天，剩下的由系统去记录时间、补齐轨迹、主动出现。
+
 <a id="user-guide"></a>
-## 鐢ㄦ埛浣跨敤
+## 用户使用
 
-### 鐜鍓嶆彁
+### 环境前提
 
 - Node.js `>= 22`
-- 鏈満宸插畨瑁?`codex` 鎴?`claude`
-- 濡傛灉闇€瑕佹埅鍥撅紝鏈満闇€瑕佸彲鐢ㄧ殑 Chrome / Chromium / Edge
+- 本机已安装 `codex`
+- 如果需要截图，本机需要可用的 Chrome / Chromium / Edge
 
-### 鑾峰彇婧愮爜涓庡畨瑁呬緷璧?
-褰撳墠娌℃湁鍙戝竷 npm 鍖呫€傛纭敤娉曟槸鍏堟媺婧愮爜锛屽啀鍦ㄤ粨搴撶洰褰曢噷瀹夎渚濊禆锛?
+### 获取源码与安装依赖
+
+当前没有发布 npm 包。正确用法是先拉源码，再在仓库目录里安装依赖：
+
 ```bash
 git clone https://github.com/WenXiaoWendy/cyberboss.git
 cd cyberboss
 npm install
 ```
 
-涓嶈鎶?README 閲岀殑鍛戒护鐞嗚В鎴愨€滃叏灞€瀹夎鍚庣洿鎺ュ彲鐢ㄢ€濈殑 npm package 鍛戒护銆?
-### 鍦ㄨ窇绗竴涓懡浠ゅ墠鍏堥厤鐜鍙橀噺
+不要把 README 里的命令理解成“全局安装后直接可用”的 npm package 命令。
 
-`Cyberboss` 浼氭寜杩欎釜椤哄簭璇诲彇鐜鍙橀噺锛?
-- 褰撳墠椤圭洰鐩綍涓嬬殑 `.env`
+### 在跑第一个命令前先配环境变量
+
+`Cyberboss` 会按这个顺序读取环境变量：
+
+- 当前项目目录下的 `.env`
 - `${HOME}/.cyberboss/.env`
-- 褰撳墠 shell 鐜
+- 当前 shell 环境
 
-寤鸿浣犲湪绗竴娆¤繍琛屼换浣曞懡浠ゅ墠锛岃嚦灏戝厛閰嶇疆杩欏嚑椤癸細
+建议你在第一次运行任何命令前，至少先配置这几项：
 
 ```dotenv
-CYBERBOSS_USER_NAME=浣犵殑鍚嶅瓧
+CYBERBOSS_USER_NAME=你的名字
 CYBERBOSS_USER_GENDER=female
-CYBERBOSS_ALLOWED_USER_IDS=浣犵殑寰俊 user id
-CYBERBOSS_WORKSPACE_ROOT=/缁濆璺緞/浣犵殑椤圭洰鐩綍
+CYBERBOSS_ALLOWED_USER_IDS=你的微信 user id
+CYBERBOSS_WORKSPACE_ROOT=/绝对路径/你的项目目录
 ```
 
-鍙€夊父鐢ㄩ」锛?
+可选常用项：
+
 ```dotenv
-CYBERBOSS_RUNTIME=codex
-CYBERBOSS_CODEX_ENDPOINT=ws://127.0.0.1:8765
-CYBERBOSS_CODEX_COMMAND=
-CYBERBOSS_CODEX_MODEL=
-CYBERBOSS_CODEX_MODEL_PROVIDER=
-CYBERBOSS_CODEX_NATIVE_IMAGE_INPUT=
-CYBERBOSS_CLAUDE_COMMAND=claude
-CYBERBOSS_CLAUDE_MODEL=
-CYBERBOSS_CLAUDE_CONTEXT_WINDOW=
-CYBERBOSS_CLAUDE_PERMISSION_MODE=default
-CYBERBOSS_CLAUDE_DISABLE_VERBOSE=false
-CYBERBOSS_CLAUDE_EXTRA_ARGS=
-CLAUDE_CODE_MAX_OUTPUT_TOKENS=
-CYBERBOSS_VISION_MODE=auto
-CYBERBOSS_VISION_PROVIDER=openai-compatible
-CYBERBOSS_VISION_API_BASE_URL=
-CYBERBOSS_VISION_API_KEY=
-CYBERBOSS_VISION_MODEL=
-CYBERBOSS_VISION_TIMEOUT_MS=30000
 CYBERBOSS_ACCOUNT_ID=
-CYBERBOSS_WEIXIN_MIN_CHUNK_CHARS=20
-CYBERBOSS_WEIXIN_BASE_URL=https://ilinkai.weixin.qq.com
-CYBERBOSS_WEIXIN_CDN_BASE_URL=https://novac2c.cdn.weixin.qq.com/c2c
-CYBERBOSS_WEIXIN_QR_BOT_TYPE=3
-CYBERBOSS_ENABLE_LOCATION_SERVER=false
-CYBERBOSS_LOCATION_HOST=0.0.0.0
-CYBERBOSS_LOCATION_PORT=4318
-CYBERBOSS_LOCATION_TOKEN=
-CYBERBOSS_LOCATION_HOME_CENTER=
-CYBERBOSS_LOCATION_WORK_CENTER=
-CYBERBOSS_LOCATION_KNOWN_PLACES=
-CYBERBOSS_LOCATION_PLACE_RADIUS_METERS=150
-CYBERBOSS_LOCATION_BATTERY_HISTORY_LIMIT=100
+CYBERBOSS_CODEX_ENDPOINT=ws://127.0.0.1:8765
+CYBERBOSS_WEIXIN_ADAPTER=v2
 ```
 
-杩欎簺鍙橀噺鐨勪綔鐢細
+`CYBERBOSS_ALLOWED_USER_IDS` 支持逗号分隔多个 user id。
 
-- `CYBERBOSS_RUNTIME`
-  閫夋嫨 `codex` 鎴?`claudecode`銆備袱绉?runtime 浣跨敤鍚屼竴濂楀懡浠ゃ€?- `CYBERBOSS_CODEX_ENDPOINT`
-  澶嶇敤宸叉湁鐨勫叡浜?Codex app-server锛岃€屼笉鏄柊璧风鏈?runtime銆?- `CYBERBOSS_CODEX_COMMAND`
-  褰?`codex` 涓嶅湪 `PATH` 涓婃椂锛岃嚜瀹氫箟 Codex 鍚姩鍛戒护銆?- `CYBERBOSS_CODEX_MODEL`
-  寮哄埗 Codex turn 浣跨敤鎸囧畾妯″瀷銆傜暀绌哄垯浣跨敤 Codex 榛樿妯″瀷閫夋嫨銆?- `CYBERBOSS_CODEX_MODEL_PROVIDER`
-  寮哄埗 Codex turn 浣跨敤鎸囧畾 provider锛屼緥濡傛湰鍦版ā鍨嬪彲濉?`ollama`銆傜暀绌哄垯浣跨敤榛樿浜戠 provider銆?- `CYBERBOSS_CODEX_NATIVE_IMAGE_INPUT`
-  Codex app-server 鐩翠紶鍥剧墖鑳藉姏鐨勫彲閫夎鐩栥€傜暀绌烘椂鎸?model metadata 鍒ゆ柇锛涜涓?`true` 鍙洿鎺ユ祴璇曟湰鍦板妯℃€佹ā鍨嬶紝璁句负 `false` 鍙己鍒惰蛋 caption fallback銆?- `CYBERBOSS_CLAUDE_COMMAND`
-  鑷畾涔?Claude 鍚姩鍛戒护锛岄粯璁ゆ槸 `claude`銆?- `CYBERBOSS_CLAUDE_MODEL`
-  璁剧疆 Claude 榛樿妯″瀷銆?- `CYBERBOSS_CLAUDE_CONTEXT_WINDOW`
-  璁剧疆 Claude 瀹為檯涓婁笅鏂囩獥鍙ｏ紝`/status` 閲岀殑 `馃摝 context` 杩戜技鍊间細鍩轰簬瀹冭绠椼€?- `CYBERBOSS_CLAUDE_PERMISSION_MODE`
-  璁剧疆 Claude 鏉冮檺妯″紡銆?- `CYBERBOSS_CLAUDE_DISABLE_VERBOSE`
-  鍏抽棴 Claude 缁堢 verbose 杈撳嚭銆?- `CYBERBOSS_CLAUDE_EXTRA_ARGS`
-  浠ラ€楀彿鍒嗛殧鐨勫舰寮忚拷鍔?Claude CLI 鍙傛暟銆?- `CLAUDE_CODE_MAX_OUTPUT_TOKENS`
-  涓?Claude 鍥炲棰勭暀杈撳嚭 token銆俙/status` 浼氬厛浠?Claude 涓婁笅鏂囩獥鍙ｉ噷鍑忔帀杩欓儴鍒嗛鐣欓噺銆?- `CYBERBOSS_VISION_MODE`
-  璁剧疆鍏ョ珯鍥剧墖澶勭悊鏂瑰紡锛歚auto`銆乣caption`銆乣native` 鎴?`off`銆俙auto` 浼氬湪 runtime 鏀寔鍘熺敓鍥剧墖杈撳叆鏃剁洿鎺ヤ紶鍥撅紝鍚﹀垯浣跨敤 caption銆?- `CYBERBOSS_VISION_PROVIDER`銆乣CYBERBOSS_VISION_API_BASE_URL`銆乣CYBERBOSS_VISION_API_KEY`銆乣CYBERBOSS_VISION_MODEL`
-  閰嶇疆鍙€夌殑 OpenAI-compatible 璇嗗浘 caption API锛屼緵 DeepSeek 杩欑被鏂囨湰妯″瀷浣跨敤銆俀wen/DashScope 鍙粠 [templates/vision-openai-compatible.env](./templates/vision-openai-compatible.env) 寮€濮嬨€?- `CYBERBOSS_VISION_TIMEOUT_MS`
-  鍗曞紶鍥剧墖 caption 璇锋眰瓒呮椂鏃堕棿銆?- `CYBERBOSS_WEIXIN_MIN_CHUNK_CHARS`
-  璁剧疆寰俊鐭垎鐗囧悎骞堕槇鍊奸粯璁ゅ€笺€?- `CYBERBOSS_WEIXIN_BASE_URL`銆乣CYBERBOSS_WEIXIN_CDN_BASE_URL`銆乣CYBERBOSS_WEIXIN_QR_BOT_TYPE`
-  鍦ㄧ壒娈婇儴缃茬幆澧冧笅瑕嗙洊寰俊妗ユ帴鎺ュ彛鍦板潃鍜屼簩缁寸爜 bot 绫诲瀷銆?- `CYBERBOSS_ENABLE_LOCATION_SERVER`
-  鏄惁鍚姩鍐呯疆 whereabouts HTTP 鎺ユ敹鏈嶅姟銆?- `CYBERBOSS_LOCATION_HOST`
-  鍐呯疆 whereabouts HTTP 鏈嶅姟鐩戝惉鍦板潃锛岄粯璁?`0.0.0.0`銆?- `CYBERBOSS_LOCATION_PORT`
-  鍐呯疆 whereabouts HTTP 鏈嶅姟绔彛锛岄粯璁?`4318`銆?- `CYBERBOSS_LOCATION_TOKEN`
-  涓婁紶瀹氫綅鏁版嵁鏃朵娇鐢ㄧ殑 Bearer token銆?- `CYBERBOSS_LOCATION_HOME_CENTER`銆乣CYBERBOSS_LOCATION_WORK_CENTER`
-  瀹跺拰鍏徃鐨勪腑蹇冨潗鏍囷紝鏍煎紡 `lat,lng`銆?- `CYBERBOSS_LOCATION_KNOWN_PLACES`
-  棰濆鍦扮偣鏍囩锛孞SON 鏁扮粍銆?- `CYBERBOSS_LOCATION_PLACE_RADIUS_METERS`
-  鍦扮偣鏍囩璇嗗埆鍗婂緞锛岄粯璁?`150`銆?- `CYBERBOSS_LOCATION_BATTERY_HISTORY_LIMIT`
-  鐢甸噺瑙傛祴淇濈暀鏁伴噺锛岄粯璁?`100`銆?
+原因有两个：
 
-`CYBERBOSS_ALLOWED_USER_IDS` 鏀寔閫楀彿鍒嗛殧澶氫釜 user id銆?
-鍘熷洜鏈変袱涓細
+- 第一次运行任意 `cyberboss` 命令时，会自动生成 `~/.cyberboss/weixin-instructions.md`
+- 如果你没先设置 `CYBERBOSS_USER_NAME` 和 `CYBERBOSS_USER_GENDER`，生成出来的 instructions 可能不符合真实情况
 
-- 绗竴娆¤繍琛屼换鎰?`cyberboss` 鍛戒护鏃讹紝浼氳嚜鍔ㄧ敓鎴?`~/.cyberboss/weixin-instructions.md`
-- 濡傛灉浣犳病鍏堣缃?`CYBERBOSS_USER_NAME` 鍜?`CYBERBOSS_USER_GENDER`锛岀敓鎴愬嚭鏉ョ殑 instructions 鍙兘涓嶇鍚堢湡瀹炴儏鍐?
-鍙﹀锛屽鏋滀綘鎯宠鏇村己鐨勨€減ush 鎰熲€濓紝寤鸿涓€寮€濮嬪厛涓嶈涓诲姩澶ф敼 instructions 妯℃澘銆傚厛璁?agent 鍦ㄧ湡瀹炰氦娴侀噷鑷繁鏇存柊琛屼负锛屽啀鍥炲ご鍙慨鏄庢樉涓嶅鐨勯儴鍒嗐€?
-濡傛灉浣犺璺戝叡浜嚎绋嬶紝寤鸿涔熷湪绗竴娆″惎鍔ㄥ墠灏辨妸 `CYBERBOSS_WORKSPACE_ROOT` 閰嶅ソ銆傝繖鏍?`shared:open` 浼氫紭鍏堟帴鍒颁綘褰撳墠椤圭洰瀵瑰簲鐨勯偅鏉＄嚎绋嬶紝鑰屼笉鏄洖閫€鍒板埆鐨勫巻鍙茬粦瀹氥€?
-濡傛灉浣犱娇鐢?Ollama 杩欑被鏈湴 Codex provider锛屾帹鑽愮敤涓€涓緢灏忕殑 wrapper script锛屼笉瑕佺洿鎺ユ妸 provider flags 濉炶繘 `CYBERBOSS_CODEX_COMMAND`銆傛妸 [templates/codex-local-provider.sh](./templates/codex-local-provider.sh) 澶嶅埗鍒?`${HOME}/.cyberboss/codex-local`锛岀粰瀹冩墽琛屾潈闄愶紝骞惰 Cyberboss 浣跨敤杩欎釜 wrapper锛?
-```bash
-cp ./templates/codex-local-provider.sh "${HOME}/.cyberboss/codex-local"
-chmod +x "${HOME}/.cyberboss/codex-local"
-```
+另外，如果你想要更强的“push 感”，建议一开始先不要主动大改 instructions 模板。先让 agent 在真实交流里自己更新行为，再回头只修明显不对的部分。
 
-```dotenv
-CYBERBOSS_CODEX_COMMAND=/缁濆璺緞/.cyberboss/codex-local
-CYBERBOSS_CODEX_MODEL_PROVIDER=ollama
-CYBERBOSS_CODEX_MODEL=gemma4:26b-32k
-```
+如果你要跑共享线程，建议也在第一次启动前就把 `CYBERBOSS_WORKSPACE_ROOT` 配好。这样 `shared:open` 会优先接到你当前项目对应的那条线程，而不是回退到别的历史绑定。
 
-杩欎釜妯℃澘浼氭妸浜戠鍜屾湰鍦板惎鍔ㄩ€昏緫鏀舵暃鍦ㄥ悓涓€涓?command 閲屻€傚垏鍥炰簯绔?provider 鏃讹紝娓呯┖ `CYBERBOSS_CODEX_MODEL_PROVIDER` 鍜?`CYBERBOSS_CODEX_MODEL`锛岀劧鍚庨噸鍚叡浜ˉ鎺ワ紝璁?Codex app-server 鐢ㄦ柊鐨?command 鐜鍚姩銆?
-鏈湴 Codex 妯″瀷杩橀渶瑕?model metadata銆傚鏋?`CYBERBOSS_CODEX_MODEL` 鎸囧悜鐨勬ā鍨嬩笉鍦?Codex 鍐呯疆 catalog 閲岋紝闇€瑕佸湪 Codex home 閲屾斁涓€浠芥ā鍨?catalog锛屽苟鍦?`~/.codex/config.toml` 閲屽紩鐢細
-
-```toml
-model_catalog_json = "/缁濆璺緞/.codex/local-models.json"
-```
-
-杩欎唤鏂囦欢搴斿熀浜庝綘鐜版湁鐨?Codex model catalog 鐢熸垚锛屽啀杩藉姞鏈湴妯″瀷鏉＄洰銆傛瘡涓湰鍦版ā鍨嬫潯鐩嚦灏戣鍜屽疄闄呮ā鍨?slug 瀵归綈锛屽苟鍐欐竻妤氭纭殑 `context_window`銆乣max_context_window`銆乣input_modalities` 鍜?truncation policy銆備笉瑕佸彧淇濈暀鏈湴妯″瀷鑰屽垹鎺変簯绔ā鍨嬫潯鐩€傞厤缃悗鐢?`codex debug models` 楠岃瘉锛涙湰鍦版ā鍨嬪簲璇ヨ兘琚垪鍑猴紝骞朵笖涓嶅簲鍐嶅嚭鐜?fallback metadata 璀﹀憡銆?
-褰?`CYBERBOSS_RUNTIME=claudecode` 鏃讹紝Cyberboss 浼氬湪褰撳墠宸ヤ綔鍖鸿嚜鍔ㄨˉ鍐?`.mcp.json` 閲岀殑 `cyberboss_tools`锛屽苟鍦ㄥ惎鍔?Claude 鏃舵樉寮忔寕涓婅繖浠?MCP 閰嶇疆銆侰laude 鑳藉彂鐜?Cyberboss project tools锛岄潬鐨勫氨鏄繖鏉￠」鐩湰鍦伴厤缃紝鑰屼笉鏄叏灞€娉ㄥ唽銆?
-### 鐢ㄦ埛鑷繁浼氱敤鍒扮殑缁堢鍛戒护
+### 用户自己会用到的终端命令
 
 - `npm run login`
-  鎵爜鐧诲綍寰俊锛屽苟鎶?bot 璐﹀彿淇濆瓨鍒版湰鍦?- `npm run accounts`
-  鏌ョ湅鏈湴宸蹭繚瀛樼殑璐﹀彿
+  扫码登录微信，并把 bot 账号保存到本地
+- `npm run accounts`
+  查看本地已保存的账号
 - `npm run shared:start`
-  榛樿鍚姩鏂瑰紡銆傝法骞冲彴鍚姩鍏变韩 runtime bridge 鍜屽叡浜井淇℃ˉ鎺ワ紱Windows / macOS / Linux 閮戒紭鍏堢敤杩欎釜鍏ュ彛
+  默认启动方式。跨平台启动共享 `codex app-server` 和共享微信桥接；Windows / macOS / Linux 都优先用这个入口
 - `npm run shared:open`
-  榛樿鎺ョ鏂瑰紡銆傝法骞冲彴鎺ュ叆褰撳墠寰俊缁戝畾鐨勯偅鏉″叡浜嚎绋?- `npm run shared:status`
-  璺ㄥ钩鍙版煡鐪嬪叡浜?runtime 杩涚▼銆佸叡浜ˉ鎺ュ拰 `readyz` 鐘舵€?- `npm run doctor`
-  鏌ョ湅褰撳墠閰嶇疆銆乧hannel/runtime 杈圭晫鍜岀嚎绋嬬姸鎬?- `npm run help`
-  鏌ョ湅鍙洿鎺ユ墽琛岀殑鍛戒护鍏ュ彛
+  默认接管方式。跨平台接入当前微信绑定的那条共享线程
+- `npm run shared:status`
+  跨平台查看共享 `app-server`、共享桥接和 `readyz` 状态
+- `npm run doctor`
+  查看当前配置、channel/runtime 边界和线程状态
+- `npm run help`
+  查看可直接执行的命令入口
 
-杩欓噷鐨?`checkin` 鎸囩殑灏辨槸鈥滈殢鏈鸿疆璇㈠敜閱掆€濊兘鍔涳紝涓嶆槸鍥哄畾鏁寸偣鎻愰啋銆?
-鍒囨崲 runtime 鍙渶瑕佹敼 `CYBERBOSS_RUNTIME`銆備笉闇€瑕佷负 Claude Code 鍗曠嫭瀛︿範鍙︿竴濂楀懡浠ゃ€?
-`npm run start` / `npm run start:checkin` 鍙互鐢ㄤ簬鏈湴鏈€灏忛摼璺皟璇曪紝浣嗕笉閫傚悎瑙傚療鍏变韩妗ョ殑鐪熷疄琛屼负锛屼篃涓嶉€傚悎浣滀负鍏变韩绾跨▼闂鐨勯粯璁ゆ帓鏌ュ叆鍙ｃ€傚洜姝?README 鍙妸鍏变韩妯″紡浣滀负榛樿鍏ュ彛銆?
-### 鐢ㄦ埛鍦ㄥ井淇￠噷浼氱敤鍒扮殑鍛戒护
+这里的 `checkin` 指的就是“随机轮询唤醒”能力，不是固定整点提醒。
 
-- `/bind /缁濆璺緞`
-  缁戝畾褰撳墠鑱婂ぉ浣跨敤鐨勯」鐩洰褰?- `/status`
-  鏌ョ湅褰撳墠缁戝畾椤圭洰銆佺嚎绋嬨€佹ā鍨嬪拰涓婁笅鏂囩姸鎬?- `/new`
-  鍒囧埌鏂扮嚎绋嬭崏绋?- `/reread`
-  璁╁綋鍓嶇嚎绋嬮噸鏂拌鍙栨渶鏂?instructions锛岄€傚悎鍒氭敼瀹屼汉鏍兼ā鏉挎垨鎿嶄綔妯℃澘鍚庝娇鐢?- `/compact`
-  鍘嬬缉褰撳墠绾跨▼涓婁笅鏂囥€傛ˉ浼氬厛鍥炰竴鏉″紑濮嬫彁绀猴紝瀹屾垚鍚庡啀鍥炰竴鏉″畬鎴愭彁绀恒€?- `/switch <threadId>`
-  鍒囨崲鍒版寚瀹氱嚎绋?- `/stop`
-  鍋滄褰撳墠绾跨▼閲岀殑杩愯
-- `/checkin <min>-<max>`
-  璋冩暣褰撳墠椤圭洰鐨勯殢鏈?checkin 鍖洪棿
-- `/chunk <number>`
-  璋冩暣寰俊鐭洖澶嶇殑鏈€灏忓悎骞跺瓧绗︽暟
+`npm run start` / `npm run start:checkin` 可以用于本地最小链路调试，但不适合观察共享桥的真实行为，也不适合作为共享线程问题的默认排查入口。因此 README 只把共享模式作为默认入口。
+
+### 用户在微信里会用到的命令
+
+- `/bind /绝对路径`
+  绑定当前聊天使用的项目目录
+- `/status`
+  查看当前绑定项目、线程、模型和上下文状态
+- `/new`
+  切到新线程草稿
+- `/reread`
+  让当前线程重新读取最新 instructions，适合刚改完人格模板或操作模板后使用
+- `/switch <threadId>`
+  切换到指定线程
+- `/stop`
+  停止当前线程里的运行
 - `/yes`
-  鍏佽褰撳墠寰呭鐞嗘巿鏉冧竴娆?- `/always`
-  鍦ㄥ綋鍓嶉」鐩唴鎸佺画鍏佽鍚岀被鍛戒护
+  允许当前待处理授权一次
+- `/always`
+  在当前项目内持续允许同前缀命令
 - `/no`
-  鎷掔粷褰撳墠寰呭鐞嗘巿鏉?- `/model`
-  鏌ョ湅褰撳墠妯″瀷
+  拒绝当前待处理授权
+- `/model`
+  查看当前模型
 - `/model <id>`
-  鍒囨崲妯″瀷
-- `/star`
-  鍦ㄥ井淇￠噷鏌ョ湅 GitHub star 寮曞
+  切换模型
 - `/help`
-  鏌ョ湅寰俊鍐呭懡浠ゅ府鍔?
-鏅€氭枃鏈秷鎭細鐩存帴鍙戦€佸埌褰撳墠缁戝畾绾跨▼銆傚鏋滃綋鍓嶈繕娌＄粦瀹氶」鐩紝鍏堟墽琛岋細
+  查看微信内命令帮助
+
+普通文本消息会直接发送到当前绑定线程。如果当前还没绑定项目，先执行：
 
 ```text
-/bind /缁濆璺緞
+/bind /绝对路径
 ```
 
-### 鍙岀鐩戞帶鍚屼竴鏉＄嚎绋?
-濡傛灉浣犳兂鎶婂井淇￠噷褰撳墠缁戝畾鐨勫悓涓€鏉″叡浜嚎绋嬪悓姝ュ埌鏈満缁堢缁х画鐪嬶紝绋冲畾娴佺▼鏄細
+### 双端监控同一条线程
 
-绗竴涓粓绔細
+如果你想把微信里当前绑定的同一条 Codex 线程同步到本机终端继续看、继续接管，稳定流程是：
+
+第一个终端：
 
 ```bash
 npm run shared:start
 ```
 
-淇濇寔杩欎釜缁堢涓嶈閫€鍑恒€傜浜屼釜缁堢锛?
+保持这个终端不要退出。第二个终端：
+
 ```bash
 npm run shared:open
 ```
 
-杈呭姪璇婃柇锛?
+辅助诊断：
+
 - `npm run shared:status`
 
-濡傛灉浣犳兂鍦ㄦ墜鏈轰笂閫氳繃 `Termius + tmux` 闀挎湡鏌ョ湅鍏变韩绾跨▼锛屽弬鑰冿細
+注意：
 
-- [docs/termius-tmux-shared-terminal.zh-CN.md](docs/termius-tmux-shared-terminal.zh-CN.md)
-
-娉ㄦ剰锛?
-- 鍏变韩鍚姩灏辨槸榛樿鍚姩鏂瑰紡锛汻EADME 閲岀殑鎵€鏈夋甯镐娇鐢ㄥ満鏅兘榛樿寤虹珛鍦?`npm run shared:start` / `npm run shared:open` 涔嬩笂
-- 涓嶇搴曞眰 runtime 鏄?Codex 杩樻槸 Claude Code锛屽井淇￠噷鐨勫懡浠ゅ拰鏃ュ父琛屼负閮戒繚鎸佷竴鑷?- 濡傛灉 `CYBERBOSS_RUNTIME=claudecode`锛屾湰鍦?Claude 绐楀彛褰撳墠鏇撮€傚悎浣滀负鍏变韩绾跨▼鐨勭洃鍚獥鍙?- 涓嶈鍗曠嫭鎵ц `node ./bin/cyberboss.js start --checkin`锛岄櫎闈炲凡缁忔槑纭缃?`CYBERBOSS_CODEX_ENDPOINT=ws://127.0.0.1:8765`
-- 涓嶈璁╁井淇℃ˉ鎺ヨ蛋 `spawn` 绉佹湁 runtime锛涘井淇″拰缁堢蹇呴』杩炴帴鍚屼竴濂楀叡浜?runtime 浼氳瘽
-- 涓嶈鍚屾椂淇濈暀澶氬 `cyberboss` 杩涚▼
-- 涓嶈鎶?`npm run shared:start` 鏀惧埌鍚庡彴璺戯紱瀹冨氨鏄叡浜ˉ鎺ヤ富杩涚▼
-- Windows 鐢ㄦ埛涓嶈鍐嶄娇鐢?`.sh` 鍏ュ彛锛涘叡浜惎鍔ㄥ拰鎺ョ璇风粺涓€浣跨敤 `npm run shared:start` / `npm run shared:open`
-
+- 共享启动就是默认启动方式；README 里的所有正常使用场景都默认建立在 `npm run shared:start` / `npm run shared:open` 之上
+- 不要单独执行 `node ./bin/cyberboss.js start --checkin`，除非已经明确设置 `CYBERBOSS_CODEX_ENDPOINT=ws://127.0.0.1:8765`
+- 不要让微信桥接走 `spawn` 私有 runtime；微信和终端必须连接同一个共享 `codex app-server`
+- 不要同时保留多套 `cyberboss` 进程
+- 不要把 `npm run shared:start` 放到后台跑；它就是共享桥接主进程
+- Windows 用户不要再使用 `.sh` 入口；共享启动和接管请统一使用 `npm run shared:start` / `npm run shared:open`
 
 ## Docker 部署
 
@@ -304,110 +270,107 @@ docker compose up -d
 
 详细说明请参考 [DEPLOY_DOCKER.md](./DEPLOY_DOCKER.md)。
 <a id="data-dir"></a>
-## 鏈湴鏁版嵁鏀惧湪鍝噷
+## 本地数据放在哪里
 
-榛樿鐘舵€佺洰褰曟槸锛?
+默认状态目录是：
+
 ```text
 ${HOME}/.cyberboss
 ```
 
-甯歌鍐呭锛?
+常见内容：
+
 - `accounts/`
-  寰俊 bot 璐﹀彿淇℃伅
+  微信 bot 账号信息
 - `sessions.json`
-  宸ヤ綔鍖恒€佺嚎绋嬨€佹ā鍨嬪拰瀹℃壒鐘舵€?- `sync-buffers/`
-  寰俊闀胯疆璇㈠悓姝ョ紦鍐?- `inbox/`
-  淇濆瓨鏀跺埌鐨勫井淇″浘鐗囧拰闄勪欢
-- `stickers/`
-  琛ㄦ儏鍖呰祫浜х洰褰曪紝鍖呭惈锛?  - `assets/`
-    宸插叆搴撹〃鎯呭寘绱犳潗锛屽綋鍓嶇粺涓€瑙勮寖鍖栦负 GIF
-  - `index.json`
-    琛ㄦ儏鍖呯储寮曪紝缁存姢 `stickerId -> { tags, desc }`
-  - `tags.json`
-    琛ㄦ儏鍖呮爣绛捐〃锛孉I 璇诲彇杩欓噷锛岀敤鎴蜂篃鍙互鎵嬪姩缂栬緫杩欓噷
+  工作区、线程、模型和审批状态
+- `sync-buffers/`
+  微信长轮询同步缓冲
 - `weixin-instructions.md`
-  棣栨杩愯鑷姩鐢熸垚鐨勬湰鍦?instructions
+  首次运行自动生成的本地 instructions
 - `reminder-queue.json`
-  reminder 闃熷垪
+  reminder 队列
 - `system-message-queue.json`
-  system / checkin 闃熷垪
-- `deferred-system-replies.json`
-  绛夊緟涓嬩竴涓彲鐢ㄥ井淇?context token 鐨勮ˉ鍙戞秷鎭?- `timeline-screenshot-queue.json`
-  鎴浘浠诲姟闃熷垪
+  system / checkin 队列
+- `timeline-screenshot-queue.json`
+  截图任务队列
 - `diary/`
-  鏈湴鏃ヨ
+  本地日记
 - `timeline/`
-  timeline 鏁版嵁銆乻ite銆乻hots
+  timeline 数据、site、shots
 - `logs/`
-  鍏变韩 bridge 鍜?shared runtime 鏃ュ織
+  共享 bridge 和 shared app-server 日志
 
-杩欎釜鐩綍鍙槸鏈湴鐘舵€佺洰褰曪紝涓嶆槸绾跨▼宸ヤ綔鐩綍锛涘井淇＄嚎绋嬪拰缁堢绾跨▼浠嶇劧搴旇寮€鍦ㄤ綘鐨勯」鐩洰褰曢噷銆?
-浠撳簱鏈韩涓嶅寘鍚綘鐨勫井淇¤处鍙枫€乣context_token`銆佷細璇濇枃浠舵垨鍏朵粬杩愯鎬佹暟鎹紱杩欎簺閮戒繚瀛樺湪鐘舵€佺洰褰曢噷銆?
-### 琛岃釜鏈嶅姟璇存槑
+这个目录只是本地状态目录，不是线程工作目录；微信线程和终端线程仍然应该开在你的项目目录里。
 
-- Cyberboss 宸插唴缃?`whereabouts-mcp`锛屽彲浠ョ洿鎺ユ帴鏀舵墜鏈轰笂浼犵殑瀹氫綅銆佺數閲忓拰瑙﹀彂鍘熷洜銆?- 濡傛灉瑕佸惎鐢ㄥ唴缃韪湇鍔★紝鑷冲皯闇€瑕侀厤缃細
-  - `CYBERBOSS_ENABLE_LOCATION_SERVER=true`
-  - `CYBERBOSS_LOCATION_TOKEN=<your_token>`
-  - `CYBERBOSS_LOCATION_HOME_CENTER=lat,lng`
-- 甯哥敤鍙€夐」锛?  - `CYBERBOSS_LOCATION_HOST`
-  - `CYBERBOSS_LOCATION_WORK_CENTER`
-  - `CYBERBOSS_LOCATION_KNOWN_PLACES`
-  - `CYBERBOSS_LOCATION_PLACE_RADIUS_METERS`
-  - `CYBERBOSS_LOCATION_BATTERY_HISTORY_LIMIT`
-- 鍐呯疆鏈嶅姟榛樿鐩戝惉 `http://0.0.0.0:4318`锛屼笂浼犳帴鍙ｆ槸 `POST /location/ingest`锛屽仴搴锋鏌ユ槸 `GET /healthz`銆?- 琛岃釜鏁版嵁榛樿鍐欏叆 `~/.cyberboss/locations.json`锛屼笉鏄啓杩涢」鐩洰褰曘€?
-### 琛ㄦ儏鍖呰鏄?
-- 褰撳墠杩欐潯寰俊妗ラ摼璺噷锛屽井淇″嚭鍏ョ珯閮戒笉鑳芥妸鍔ㄥ浘灞曠ず鑳藉姏褰撴垚鍙潬鍓嶆彁銆備笉瑕佸亣璁惧彂鍑哄幓鎴栨敹杩涙潵鐨?GIF 浼氬湪鑱婂ぉ绐楀彛閲屾甯告挱鏀俱€?- 鍥犳锛岃〃鎯呭寘鍏ュ簱鏃跺綋鍓嶇粺涓€瑙勮寖鍖栦负 GIF锛岀洰鐨勬槸鍏堟妸璧勪骇鏍煎紡鏀舵暃濂姐€傝繖鏍峰悗缁鏋滃井淇″紑鏀炬洿瀹屾暣鐨勮〃鎯呰兘鍔涳紝鍙互鐩存帴澶嶇敤鐜版湁搴撳瓨鑰屼笉鐢ㄩ噸鏂版暣鐞嗐€?- 鏍囩琛ㄥ浐瀹氭斁鍦?`~/.cyberboss/stickers/tags.json`銆侫I 浼氫粠杩欓噷璇诲彇鍙敤鏍囩锛岀敤鎴蜂篃鍙互鐩存帴鎵嬪姩澧炲垹鏀广€?- 涓轰簡鏂逛究绠＄悊锛屽綋鍓嶈〃鎯呭寘妫€绱㈠彧鍋氭爣绛捐繃婊わ紝涓嶅仛鍚戦噺搴撳彫鍥炪€?
+仓库本身不包含你的微信账号、`context_token`、会话文件或其他运行态数据；这些都保存在状态目录里。
+
 <a id="agent-guide"></a>
-## Agent 鎺ュ叆
+## Agent 接入
 
-缁?agent 鏆撮湶鐨?Cyberboss 鑳藉姏鏄」鐩唴缁撴瀯鍖栧伐鍏枫€?
-### 甯哥敤椤圭洰宸ュ叿
+下面这些命令主要是给 agent / 自动化能力使用的，不是普通用户每天手敲的主入口。
 
-- `cyberboss_reminder_create`
-- `cyberboss_diary_append`
-- `cyberboss_timeline_write`
-- `cyberboss_timeline_build`
-- `cyberboss_timeline_serve`
-- `cyberboss_timeline_dev`
-- `cyberboss_timeline_screenshot`
-- `cyberboss_channel_send_file`
-- `whereabouts_current_stay`
-- `whereabouts_recent_stays`
-- `whereabouts_recent_moves`
-- `whereabouts_snapshot`
-- `whereabouts_summary`
-- `cyberboss_sticker_tags`
-- `cyberboss_sticker_pick`
-- `cyberboss_sticker_send`
-- `cyberboss_sticker_delete`
-- `cyberboss_sticker_save_from_inbox`
-- `cyberboss_sticker_update`
-- `cyberboss_system_send`
+### Agent 常用命令
 
-### Agent 浣跨敤绾﹀畾
+- `npm run reminder:write -- --delay 30m --text "提醒内容"`
+  给未来的自己留 reminder
+- `npm run reminder:write -- --at "2026-04-07 21:30" --text "提醒内容"`
+  写明确时间点 reminder
+- `npm run diary:write -- --title 标题 --text "内容"`
+  写本地日记
+- `npm run diary:write -- --date 2026-04-06 --title "4.6" --text "内容"`
+  写指定日期日记
+- `npm run timeline:write -- --date YYYY-MM-DD --stdin`
+  增量写入时间轴
+- `npm run timeline:build`
+  构建时间轴静态页面
+- `npm run timeline:serve`
+  启动时间轴静态页面服务
+- `npm run timeline:dev`
+  启动时间轴热更新开发服务
+- `npm --prefix "$CYBERBOSS_HOME" run timeline:screenshot -- --send`
+  稳定截图入口，会把截图任务交给当前微信桥执行
+- `npm run channel:send-file -- --path /绝对路径`
+  把本地已有文件直接发回当前微信聊天
+- `npm run system:send -- --text "系统消息"`
+  向内部系统队列写入一条不可见触发消息
+- `npm run system:checkin`
+  底层随机轮询入口，通常只用于调试；正常用户直接用共享模式
 
-- diary銆乺eminder銆乼imeline銆乻creenshot銆乫ile-send 杩欑被 Cyberboss 鑳藉姏浣跨敤椤圭洰宸ュ叿
-- 缁堢缁欎汉鎵嬪姩浣跨敤鐨勪粛鐒舵槸 `README`銆乣--help` 鍜?[docs/commands.md](./docs/commands.md) 涓殑鐢熷懡鍛ㄦ湡鍏ュ彛
-- 绗竴娆℃墽琛屽け璐ユ椂锛屽厛鍙嶉鎶ラ敊锛屼笉瑕佺珛鍒昏婧愮爜
+### Agent 使用约定
 
-## 鏂囨。鍏ュ彛
+- 优先使用 `README`、`--help` 和 [docs/commands.md](./docs/commands.md) 里已经暴露的稳定入口
+- 参数不清楚时先看 `--help`
+- 第一次执行失败时，先反馈报错，不要立刻读源码
+- 如果只是发文件或截图回微信，优先用现成命令，不要去找内部 `channelAdapter.sendFile(...)`
+
+## 文档入口
 
 - [docs/commands.md](./docs/commands.md)
 
 <a id="faq"></a>
 ## FAQ
 
-### 涓轰粈涔堜笉鏄洿鎺?`npm install cyberboss`锛?
-鍥犱负褰撳墠娌℃湁鍙戝竷 npm package銆傛纭柟寮忔槸 `git clone` 浠撳簱鍚庯紝鍦ㄩ」鐩洰褰曢噷鎵ц `npm install`銆?
-### `checkin` 鍒板簳鏄粈涔堬紵
+### 为什么不是直接 `npm install cyberboss`？
 
-`checkin` 灏辨槸鈥滈殢鏈鸿疆璇㈠敜閱掆€濊兘鍔涖€傜郴缁熶細鍦ㄤ竴涓殢鏈烘椂闂寸偣鍞ら啋妯″瀷锛岃瀹冭嚜宸卞垽鏂幇鍦ㄨ涓嶈涓诲姩鍑虹幇銆?
-### 涓轰粈涔堣鍦ㄧ涓€娆¤繍琛屽墠灏辫缃敤鎴峰悕鍜屾€у埆锛?
-鍥犱负绗竴娆¤繍琛屼换鎰?`cyberboss` 鍛戒护鏃讹紝浼氳嚜鍔ㄧ敓鎴?`~/.cyberboss/weixin-instructions.md`銆傚厛閰嶅ソ `CYBERBOSS_USER_NAME` 鍜?`CYBERBOSS_USER_GENDER`锛屽彲浠ラ伩鍏嶇敓鎴愭槑鏄句笉绗﹀悎鐜板疄鐨?instructions銆?
-### 涓轰粈涔堜笉寤鸿涓€寮€濮嬪氨澶ф敼 instructions锛?
-濡傛灉浣犳兂瑕佹洿寮虹殑鈥滆禌鍗氳€佹澘鈥濇晥鏋滐紝鏈€濂藉厛璁?agent 鍦ㄧ湡瀹炲璇濋噷鑷繁闀垮嚭鑺傚锛屽啀鍥炲ご淇鏄庢樉涓嶅鐨勯儴鍒嗐€傝繃鏃╂墜宸ュ啓姝昏涓猴紝閫氬父浼氳瀹冩洿鍍忚剼鏈紝涓嶅儚鐪熺殑鍦ㄧ洴浣犮€?
+因为当前没有发布 npm package。正确方式是 `git clone` 仓库后，在项目目录里执行 `npm install`。
+
+### `checkin` 到底是什么？
+
+`checkin` 就是“随机轮询唤醒”能力。系统会在一个随机时间点唤醒模型，让它自己判断现在该不该主动出现。
+
+### 为什么要在第一次运行前就设置用户名和性别？
+
+因为第一次运行任意 `cyberboss` 命令时，会自动生成 `~/.cyberboss/weixin-instructions.md`。先配好 `CYBERBOSS_USER_NAME` 和 `CYBERBOSS_USER_GENDER`，可以避免生成明显不符合现实的 instructions。
+
+### 为什么不建议一开始就大改 instructions？
+
+如果你想要更强的“赛博老板”效果，最好先让 agent 在真实对话里自己长出节奏，再回头修正明显不对的部分。过早手工写死行为，通常会让它更像脚本，不像真的在盯你。
+
 ## License
 
-鏈」鐩富瑕侀潰鍚戜釜浜烘湰鍦伴儴缃插満鏅璁°€傜敱浜庡畠浼氶暱鏈熷鐞嗗井淇℃秷鎭€佺嚎绋嬩笂涓嬫枃銆佹彁閱掋€佺敓娲昏建杩瑰拰鍏朵粬楂樺害绉佸瘑鐨勪釜浜轰俊鎭紝鎴戜笉甯屾湜瀹冭闂簮鍖呰鎴愪簯鏈嶅姟鍚庯紝鍐嶅弽鍚戝墺澶虹敤鎴峰浠ｇ爜鍜屾暟鎹祦鍚戠殑鐭ユ儏鏉冦€?
-鍥犳锛屾湰椤圭洰閲囩敤 `AGPL-3.0-only` 鍗忚鍙戝竷銆備换浣曞熀浜庢湰椤圭洰杩涜淇敼銆佹墿灞曞苟閫氳繃缃戠粶鍚戠敤鎴锋彁渚涙湇鍔＄殑琛屼负锛岄兘蹇呴』鎸夌収 AGPL 鐨勮姹傚悜瀵瑰簲鐢ㄦ埛鎻愪緵瀹屾暣鐨勫搴旀簮浠ｇ爜銆?
-鍟嗕笟浣跨敤骞堕潪澶╃劧琚姝紝浣嗗墠鎻愭槸蹇呴』瀹屾暣閬靛畧 AGPL銆傚浜庝换浣曞舰寮忕殑闂簮灏佽銆侀棴婧?SaaS 鍖栨垨鍙彁渚涙湇鍔′笉鎻愪緵婧愮爜鐨勫仛娉曪紝鏈」鐩兘鏄庣‘涓嶆杩庛€?
+本项目主要面向个人本地部署场景设计。由于它会长期处理微信消息、线程上下文、提醒、生活轨迹和其他高度私密的个人信息，我不希望它被闭源包装成云服务后，再反向剥夺用户对代码和数据流向的知情权。
+
+因此，本项目采用 `AGPL-3.0-only` 协议发布。任何基于本项目进行修改、扩展并通过网络向用户提供服务的行为，都必须按照 AGPL 的要求向对应用户提供完整的对应源代码。
+
+商业使用并非天然被禁止，但前提是必须完整遵守 AGPL。对于任何形式的闭源封装、闭源 SaaS 化或只提供服务不提供源码的做法，本项目都明确不欢迎。
